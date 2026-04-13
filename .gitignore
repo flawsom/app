@@ -90,3 +90,12 @@ credentials.json
 .credentials
 frontend/node_modules/@next/swc-linux-x64-musl/next-swc.linux-x64-musl.node
 frontend/node_modules/@next/swc-linux-x64-gnu/next-swc.linux-x64-gnu.node
+-e 
+# Environment and credential files
+.env
+.env.*
+*.env
+credentials.json
+*.pem
+*.key
+.credentials
