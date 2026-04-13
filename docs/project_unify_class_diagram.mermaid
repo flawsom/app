@@ -1,0 +1,392 @@
+classDiagram
+    class User {
+        +UUID id
+        +String email
+        +String passwordHash
+        +UserRole role
+        +Boolean isActive
+        +DateTime createdAt
+        +DateTime updatedAt
+        +DateTime lastLoginAt
+        +String refreshToken
+        +authenticate(password: String) Boolean
+        +generateTokens() AuthTokens
+        +updateLastLogin() void
+        +deactivate() void
+    }
+
+    class Student {
+        +UUID id
+        +UUID userId
+        +String firstName
+        +String lastName
+        +String studentId
+        +String department
+        +Integer semester
+        +String phoneNumber
+        +JSON personalInfo
+        +String resumeUrl
+        +Float cgpa
+        +DateTime createdAt
+        +DateTime updatedAt
+        +updateProfile(data: StudentProfileData) void
+        +uploadResume(file: File) String
+        +getRecommendations() List~JobPosting~
+        +applyToJob(jobId: UUID) Application
+    }
+
+    class Faculty {
+        +UUID id
+        +UUID userId
+        +String firstName
+        +String lastName
+        +String employeeId
+        +String department
+        +String designation
+        +String phoneNumber
+        +JSON contactInfo
+        +DateTime createdAt
+        +DateTime updatedAt
+        +getMentorshipStudents() List~Student~
+        +approveApplication(applicationId: UUID, comments: String) void
+        +rejectApplication(applicationId: UUID, reason: String) void
+        +getApprovalRequests() List~Application~
+    }
+
+    class PlacementOfficer {
+        +UUID id
+        +UUID userId
+        +String firstName
+        +String lastName
+        +String employeeId
+        +String department
+        +JSON permissions
+        +DateTime createdAt
+        +DateTime updatedAt
+        +createJobPosting(data: JobPostingData) JobPosting
+        +getAnalytics(filters: AnalyticsFilter) AnalyticsData
+        +generateReport(type: ReportType) Report
+        +manageEmployers() List~Employer~
+    }
+
+    class Employer {
+        +UUID id
+        +UUID userId
+        +String companyName
+        +String contactPerson
+        +String email
+        +String phoneNumber
+        +String industry
+        +String website
+        +JSON companyInfo
+        +Boolean isVerified
+        +DateTime verifiedAt
+        +DateTime createdAt
+        +DateTime updatedAt
+        +createJobPosting(data: JobPostingData) JobPosting
+        +getApplications(jobId: UUID) List~Application~
+        +shortlistCandidate(applicationId: UUID) void
+        +provideFeedback(applicationId: UUID, feedback: FeedbackData) void
+    }
+
+    class JobPosting {
+        +UUID id
+        +UUID employerId
+        +String title
+        +String description
+        +JSON requirements
+        +List~String~ skillsRequired
+        +String department
+        +String location
+        +String jobType
+        +Float stipend
+        +Integer duration
+        +Date applicationDeadline
+        +Date startDate
+        +JobStatus status
+        +DateTime createdAt
+        +DateTime updatedAt
+        +publish() void
+        +close() void
+        +getApplications() List~Application~
+        +getMatchingStudents() List~Student~
+    }
+
+    class Application {
+        +UUID id
+        +UUID studentId
+        +UUID jobPostingId
+        +UUID facultyMentorId
+        +ApplicationStatus status
+        +String coverLetter
+        +DateTime appliedAt
+        +DateTime mentorApprovedAt
+        +DateTime employerReviewedAt
+        +String mentorComments
+        +String rejectionReason
+        +Float matchingScore
+        +DateTime createdAt
+        +DateTime updatedAt
+        +submitForApproval() void
+        +approve(mentorId: UUID, comments: String) void
+        +reject(reason: String) void
+        +shortlist() void
+    }
+
+    class Skill {
+        +UUID id
+        +String name
+        +String category
+        +String description
+        +Boolean isActive
+        +DateTime createdAt
+        +DateTime updatedAt
+        +getRelatedSkills() List~Skill~
+    }
+
+    class StudentSkill {
+        +UUID id
+        +UUID studentId
+        +UUID skillId
+        +SkillLevel proficiencyLevel
+        +String source
+        +Boolean isVerified
+        +DateTime acquiredAt
+        +DateTime createdAt
+        +DateTime updatedAt
+        +verify() void
+        +updateProficiency(level: SkillLevel) void
+    }
+
+    class Badge {
+        +UUID id
+        +String name
+        +String description
+        +String category
+        +String imageUrl
+        +JSON criteria
+        +Boolean isActive
+        +DateTime createdAt
+        +DateTime updatedAt
+        +award(studentId: UUID, evidence: String) StudentBadge
+    }
+
+    class StudentBadge {
+        +UUID id
+        +UUID studentId
+        +UUID badgeId
+        +String evidence
+        +Boolean isVerified
+        +DateTime awardedAt
+        +DateTime verifiedAt
+        +UUID verifiedBy
+        +DateTime createdAt
+        +DateTime updatedAt
+        +verify(verifierId: UUID) void
+    }
+
+    class Certificate {
+        +UUID id
+        +UUID studentId
+        +UUID applicationId
+        +String certificateType
+        +String title
+        +String description
+        +JSON metadata
+        +String pdfUrl
+        +String blockchainHash
+        +String blockchainTxId
+        +Boolean isAnchored
+        +DateTime issuedAt
+        +DateTime anchoredAt
+        +DateTime createdAt
+        +DateTime updatedAt
+        +generate() void
+        +anchorToBlockchain() String
+        +verify() Boolean
+    }
+
+    class Interview {
+        +UUID id
+        +UUID applicationId
+        +UUID scheduledBy
+        +DateTime scheduledTime
+        +String location
+        +String meetingLink
+        +InterviewType type
+        +InterviewStatus status
+        +JSON feedback
+        +Float rating
+        +DateTime createdAt
+        +DateTime updatedAt
+        +schedule(dateTime: DateTime, location: String) void
+        +reschedule(newDateTime: DateTime) void
+        +complete(feedback: JSON, rating: Float) void
+        +cancel(reason: String) void
+    }
+
+    class Recommendation {
+        +UUID id
+        +UUID studentId
+        +UUID jobPostingId
+        +Float matchingScore
+        +JSON reasoningData
+        +Boolean isViewed
+        +Boolean isApplied
+        +DateTime generatedAt
+        +DateTime viewedAt
+        +DateTime createdAt
+        +DateTime updatedAt
+        +markAsViewed() void
+        +getExplanation() String
+    }
+
+    class AuditLog {
+        +UUID id
+        +UUID userId
+        +String action
+        +String entityType
+        +UUID entityId
+        +JSON oldValues
+        +JSON newValues
+        +String ipAddress
+        +String userAgent
+        +DateTime timestamp
+        +log(action: String, entity: String, changes: JSON) void
+        +getActivityHistory(userId: UUID) List~AuditLog~
+    }
+
+    class Notification {
+        +UUID id
+        +UUID userId
+        +String type
+        +String title
+        +String message
+        +JSON data
+        +Boolean isRead
+        +DateTime sentAt
+        +DateTime readAt
+        +DateTime createdAt
+        +send() void
+        +markAsRead() void
+        +getUnreadCount(userId: UUID) Integer
+    }
+
+    class Analytics {
+        +UUID id
+        +String metricName
+        +String entityType
+        +UUID entityId
+        +Float value
+        +JSON dimensions
+        +Date date
+        +DateTime createdAt
+        +record(metric: String, value: Float, dimensions: JSON) void
+        +getMetrics(filters: AnalyticsFilter) List~Analytics~
+        +generateReport(type: ReportType) Report
+    }
+
+    class CalendarEvent {
+        +UUID id
+        +UUID interviewId
+        +String externalEventId
+        +String calendarProvider
+        +DateTime eventTime
+        +String title
+        +String description
+        +List~String~ attendees
+        +Boolean isSynced
+        +DateTime createdAt
+        +DateTime updatedAt
+        +syncToCalendar() Boolean
+        +updateEvent(data: EventData) void
+        +cancelEvent() void
+    }
+
+    %% Relationships
+    User ||--|| Student : "1:1"
+    User ||--|| Faculty : "1:1"
+    User ||--|| PlacementOfficer : "1:1"
+    User ||--|| Employer : "1:1"
+
+    Student ||--o{ Application : "creates"
+    Student ||--o{ StudentSkill : "has"
+    Student ||--o{ StudentBadge : "earned"
+    Student ||--o{ Certificate : "receives"
+    Student ||--o{ Recommendation : "gets"
+
+    Faculty ||--o{ Application : "approves"
+    Faculty }o--o{ Student : "mentors"
+
+    Employer ||--o{ JobPosting : "creates"
+    JobPosting ||--o{ Application : "receives"
+    JobPosting ||--o{ Recommendation : "generates"
+
+    Application ||--|| Interview : "leads to"
+    Application ||--o| Certificate : "generates"
+
+    Skill ||--o{ StudentSkill : "referenced by"
+    Badge ||--o{ StudentBadge : "awarded as"
+
+    Interview ||--|| CalendarEvent : "scheduled as"
+
+    User ||--o{ AuditLog : "generates"
+    User ||--o{ Notification : "receives"
+
+    %% Enums
+    class UserRole {
+        <<enumeration>>
+        STUDENT
+        FACULTY
+        PLACEMENT_OFFICER
+        EMPLOYER
+        ADMIN
+    }
+
+    class ApplicationStatus {
+        <<enumeration>>
+        DRAFT
+        SUBMITTED
+        MENTOR_APPROVED
+        MENTOR_REJECTED
+        EMPLOYER_REVIEWED
+        SHORTLISTED
+        INTERVIEW_SCHEDULED
+        SELECTED
+        REJECTED
+        WITHDRAWN
+    }
+
+    class JobStatus {
+        <<enumeration>>
+        DRAFT
+        PUBLISHED
+        CLOSED
+        CANCELLED
+    }
+
+    class SkillLevel {
+        <<enumeration>>
+        BEGINNER
+        INTERMEDIATE
+        ADVANCED
+        EXPERT
+    }
+
+    class InterviewType {
+        <<enumeration>>
+        PHONE
+        VIDEO
+        IN_PERSON
+        TECHNICAL
+        HR
+    }
+
+    class InterviewStatus {
+        <<enumeration>>
+        SCHEDULED
+        COMPLETED
+        CANCELLED
+        RESCHEDULED
+        NO_SHOW
+    }

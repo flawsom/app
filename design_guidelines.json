@@ -1,0 +1,96 @@
+{
+  "theme": "DARK",
+  "archetype": "Archetype 4 (Swiss & High-Contrast)",
+  "emotion": "Objective, rigorous, intelligent, Command Center",
+  "colors": {
+    "background": "#050505",
+    "surface": "#0F0F12",
+    "surface_hover": "#1A1A1E",
+    "border": "#27272A",
+    "text_primary": "#FFFFFF",
+    "text_secondary": "#A1A1AA",
+    "primary": "#00E5FF",
+    "primary_hover": "#00B8CC",
+    "secondary": "#EAB308",
+    "danger": "#EF4444",
+    "success": "#22C55E",
+    "warning": "#EAB308",
+    "info": "#3B82F6"
+  },
+  "typography": {
+    "headings": "Cabinet Grotesk",
+    "body": "IBM Plex Sans",
+    "mono": "IBM Plex Mono",
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl tracking-tighter font-black",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight font-bold",
+      "h3": "text-xl sm:text-2xl tracking-tight font-semibold",
+      "h4": "text-lg sm:text-xl font-medium",
+      "body": "text-base leading-relaxed text-zinc-300",
+      "small": "text-sm text-zinc-400",
+      "overline": "text-xs uppercase tracking-[0.2em] font-mono text-cyan-400"
+    }
+  },
+  "spacing_and_layout": {
+    "philosophy": "Dense data, functional beauty, command-center feel. Mobile-first responsive, optical alignment.",
+    "container_padding": "p-6 md:p-8",
+    "gap_strategy": "gap-4 md:gap-6",
+    "grid_modes": {
+      "command_center": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4. 'Control Room' dense mode.",
+      "match_engine": "grid-cols-1 md:grid-cols-12 gap-6. Sidebar col-span-4, main feed col-span-8.",
+      "profile_engine": "grid-cols-1 md:grid-cols-8 lg:grid-cols-12 gap-8 'Bento' Mode A for visual capability mapping."
+    }
+  },
+  "surfaces_and_micro_themes": {
+    "cards": "Flat background (bg-zinc-900), 1px subtle border (border-zinc-800), rounded-sm (2px). No soft shadows. On hover: border-cyan-500/50, slight bg shift.",
+    "active_ai_cards": "Use 'Tracing Beam' or subtle drop-shadow-[0_0_8px_rgba(0,229,255,0.3)] to indicate AI activity or high-match items.",
+    "headers": "Solid background bg-black with border-b border-zinc-800. No transparent navbars.",
+    "glassmorphism": "Only for modals/dialogs: bg-black/80 backdrop-blur-xl border border-zinc-800."
+  },
+  "components": {
+    "buttons": "Square or rounded-sm (2px). Primary: bg-cyan-500 text-black hover:bg-cyan-400. Secondary: border border-zinc-700 hover:border-zinc-500 text-white. All buttons must have specific focus/hover states.",
+    "inputs": "Shadcn components heavily customized. bg-black border-zinc-800 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500. font-mono for numbers.",
+    "charts": "Recharts or Shadcn Charts with pure high-contrast lines. Axis labels in IBM Plex Mono. Remove default grids, use dotted horizontal lines only.",
+    "badges": "font-mono text-xs uppercase px-2 py-1 bg-zinc-900 border border-zinc-800 text-zinc-300.",
+    "data_display": "Use tabular, grid borders (border-collapse) for lists to emphasize the 'Technical/System' aesthetic."
+  },
+  "motion_and_interactions": {
+    "hover_states": "All interactive elements MUST change border color or bg color on hover. transition-colors duration-200. Always ensure text contrast on hover.",
+    "system_response": "Motion = System Response. Use typing effects for AI logic, count-up animations for match scores.",
+    "live_feed": "Smooth entrance animations for new activity stream items (translate-y-2 to 0, opacity 0 to 1).",
+    "accessibility": "Respect prefers-reduced-motion. No aggressive flashing."
+  },
+  "icons_and_assets": {
+    "library": "lucide-react (default) or @phosphor-icons/react (Duotone).",
+    "images": [
+      {
+        "category": "hero_background",
+        "url": "https://images.unsplash.com/photo-1765816589173-d87bf0c38e71?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2Mzl8MHwxfHNlYXJjaHw0fHxhYnN0cmFjdCUyMG5ldHdvcmslMjBub2RlcyUyMGRhcmt8ZW58MHx8fHwxNzc1NzA5NDU1fDA&ixlib=rb-4.1.0&q=85",
+        "description": "Abstract geometric pattern of illuminated lights"
+      },
+      {
+        "category": "student_profile",
+        "url": "https://images.unsplash.com/photo-1710770563074-6d9cc0d3e338?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NTN8MHwxfHNlYXJjaHw0fHxzdHVkZW50JTIwY29kaW5nJTIwZGFya3xlbnwwfHx8fDE3NzU3MDk0NTV8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Student coding in dark environment"
+      },
+      {
+        "category": "company_logo",
+        "url": "https://images.unsplash.com/photo-1770012977129-19f856a1f935?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2MzR8MHwxfHNlYXJjaHwxfHxjb21wYW55JTIwbG9nbyUyMG9uJTIwYmxhY2slMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc3NTcwOTQ2M3ww&ixlib=rb-4.1.0&q=85",
+        "description": "Palantir logo on dark screen"
+      },
+      {
+        "category": "certificate_verification",
+        "url": "https://images.unsplash.com/photo-1762340275855-ae8f4c2c144e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzB8MHwxfHNlYXJjaHwxfHxkaWdpdGFsJTIwY2VydGlmaWNhdGUlMjB2ZXJpZmljYXRpb24lMjBkYXJrfGVufDB8fHx8MTc3NTcwOTQ2M3ww&ixlib=rb-4.1.0&q=85",
+        "description": "Account preferences screen with verification prompt"
+      }
+    ]
+  },
+  "screens": {
+    "Command Center": "Real-time system view. Live activity stream (bento grid right col), progress indicators (donut charts/circular progress), AI suggestions (top row, tracing beam borders). UI adapts based on user role.",
+    "Match Engine": "List of internships/candidates with Match % in IBM Plex Mono. A 'Why this match?' AI logic block expanding on click to show transparent reasoning.",
+    "Profile Engine": "Dynamic capability model. Skill graph (Radar chart using Recharts), Improvement suggestions list, Strength scoring (Big numbers in Mono font).",
+    "Feedback Engine": "Behavior analysis timelines, UI priority adjustment toggles. Dense analytics view.",
+    "Momentum System": "Streaks represented by Volt Yellow accents, improvement graphs over time."
+  },
+  "testing": "All interactive and key informational elements MUST include a `data-testid` attribute using kebab-case role-based naming (e.g., `data-testid='submit-application-button'`)."
+}

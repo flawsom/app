@@ -1,0 +1,232 @@
+sequenceDiagram
+    participant S as Student
+    participant FE as Frontend
+    participant API as API Gateway
+    participant AUTH as Auth Service
+    participant USER as User Service
+    participant JOB as Job Service
+    participant AI as AI Service
+    participant NOTIF as Notification Service
+    participant F as Faculty
+    participant E as Employer
+    participant CERT as Certificate Service
+    participant BC as Blockchain Service
+    participant DB as Database
+    participant CACHE as Redis Cache
+
+    Note over S,CACHE: Student Registration & Profile Setup
+    S->>FE: Register account
+    FE->>API: POST /auth/register
+    API->>AUTH: validateRegistration(userData)
+    AUTH->>USER: createUser(userData)
+    USER->>DB: INSERT user, student records
+    DB-->>USER: user created
+    USER-->>AUTH: user object
+    AUTH->>AUTH: generateTokens()
+    AUTH-->>API: tokens + user data
+    API-->>FE: authentication response
+    FE-->>S: registration success
+
+    Note over S,CACHE: Profile Update & Resume Upload
+    S->>FE: Update profile + upload resume
+    FE->>API: PUT /students/profile (with file)
+    API->>AUTH: validateToken()
+    AUTH-->>API: user validated
+    API->>USER: updateStudentProfile(data)
+    USER->>AI: parseResume(resumeFile)
+    AI->>AI: extractSkills(resumeText)
+    AI-->>USER: parsed skills data
+    USER->>DB: UPDATE student profile
+    DB-->>USER: profile updated
+    USER-->>API: success response
+    API-->>FE: profile updated
+    FE-->>S: profile update success
+
+    Note over S,CACHE: AI Recommendation Generation
+    FE->>API: GET /recommendations
+    API->>AUTH: validateToken()
+    AUTH-->>API: user validated
+    API->>AI: generateRecommendations(studentId)
+    AI->>DB: getStudentProfile(studentId)
+    DB-->>AI: student data
+    AI->>DB: getActiveJobPostings()
+    DB-->>AI: job postings
+    AI->>AI: calculateSimilarity(studentProfile, jobPostings)
+    AI->>AI: rankRecommendations()
+    AI->>CACHE: cacheRecommendations(studentId, recommendations)
+    AI-->>API: top recommendations
+    API-->>FE: recommendations list
+    FE-->>S: personalized job recommendations
+
+    Note over S,CACHE: Job Application Flow
+    S->>FE: Apply to job
+    FE->>API: POST /applications
+    API->>AUTH: validateToken()
+    AUTH-->>API: user validated
+    API->>JOB: createApplication(studentId, jobId)
+    JOB->>DB: getStudentMentor(studentId)
+    DB-->>JOB: mentor info
+    JOB->>DB: INSERT application
+    DB-->>JOB: application created
+    JOB->>NOTIF: sendMentorApprovalRequest(mentorId, applicationId)
+    NOTIF->>DB: INSERT notification
+    NOTIF->>NOTIF: sendEmail(mentorEmail, approvalRequest)
+    JOB-->>API: application submitted
+    API-->>FE: application success
+    FE-->>S: application submitted
+
+    Note over F,CACHE: Mentor Approval Process
+    F->>FE: Login to mentor dashboard
+    FE->>API: GET /applications/pending-approval
+    API->>AUTH: validateToken()
+    AUTH-->>API: mentor validated
+    API->>JOB: getPendingApprovals(mentorId)
+    JOB->>DB: SELECT pending applications
+    DB-->>JOB: pending applications
+    JOB-->>API: applications list
+    API-->>FE: pending approvals
+    FE-->>F: approval requests
+
+    F->>FE: Approve application
+    FE->>API: PUT /applications/{id}/approve
+    API->>AUTH: validateToken()
+    AUTH-->>API: mentor validated
+    API->>JOB: approveApplication(applicationId, mentorId, comments)
+    JOB->>DB: UPDATE application status
+    DB-->>JOB: application approved
+    JOB->>NOTIF: notifyStudent(studentId, approvalStatus)
+    JOB->>NOTIF: notifyEmployer(employerId, newApplication)
+    NOTIF->>DB: INSERT notifications
+    JOB-->>API: approval success
+    API-->>FE: application approved
+    FE-->>F: approval confirmed
+
+    Note over E,CACHE: Employer Review & Selection
+    E->>FE: Login to employer dashboard
+    FE->>API: GET /applications/for-review
+    API->>AUTH: validateToken()
+    AUTH-->>API: employer validated
+    API->>JOB: getApplicationsForReview(employerId)
+    JOB->>DB: SELECT applications for employer jobs
+    DB-->>JOB: applications list
+    JOB-->>API: applications data
+    API-->>FE: applications for review
+    FE-->>E: candidate applications
+
+    E->>FE: Shortlist candidate
+    FE->>API: PUT /applications/{id}/shortlist
+    API->>AUTH: validateToken()
+    AUTH-->>API: employer validated
+    API->>JOB: shortlistCandidate(applicationId)
+    JOB->>DB: UPDATE application status
+    DB-->>JOB: candidate shortlisted
+    JOB->>NOTIF: notifyStudent(studentId, shortlistStatus)
+    JOB->>NOTIF: notifyMentor(mentorId, shortlistStatus)
+    NOTIF->>DB: INSERT notifications
+    JOB-->>API: shortlist success
+    API-->>FE: candidate shortlisted
+    FE-->>E: shortlist confirmed
+
+    Note over E,CACHE: Interview Scheduling
+    E->>FE: Schedule interview
+    FE->>API: POST /interviews
+    API->>AUTH: validateToken()
+    AUTH-->>API: employer validated
+    API->>JOB: scheduleInterview(applicationId, dateTime, location)
+    JOB->>DB: INSERT interview record
+    DB-->>JOB: interview scheduled
+    JOB->>NOTIF: createCalendarEvent(interviewDetails)
+    NOTIF->>NOTIF: syncToGoogleCalendar()
+    NOTIF->>NOTIF: syncToOutlookCalendar()
+    JOB->>NOTIF: notifyAllParties(interviewDetails)
+    NOTIF->>DB: INSERT notifications
+    JOB-->>API: interview scheduled
+    API-->>FE: scheduling success
+    FE-->>E: interview confirmed
+
+    Note over E,CACHE: Internship Completion & Feedback
+    E->>FE: Provide completion feedback
+    FE->>API: POST /applications/{id}/feedback
+    API->>AUTH: validateToken()
+    AUTH-->>API: employer validated
+    API->>JOB: submitFeedback(applicationId, feedbackData)
+    JOB->>DB: INSERT feedback record
+    JOB->>DB: UPDATE application status to completed
+    DB-->>JOB: feedback recorded
+    JOB->>CERT: triggerCertificateGeneration(applicationId)
+    CERT->>DB: getCertificateData(applicationId)
+    DB-->>CERT: student and internship data
+    CERT->>CERT: generateCertificatePDF()
+    CERT->>CERT: createOpenBadgeJSON()
+    CERT->>BC: anchorToBlockchain(certificateHash)
+    BC->>BC: submitToBlockchain()
+    BC-->>CERT: blockchain transaction ID
+    CERT->>DB: INSERT certificate record
+    DB-->>CERT: certificate created
+    CERT->>NOTIF: notifyStudent(certificateReady)
+    NOTIF->>DB: INSERT notification
+    CERT-->>JOB: certificate generated
+    JOB-->>API: feedback submitted
+    API-->>FE: feedback success
+    FE-->>E: completion confirmed
+
+    Note over S,CACHE: Certificate Verification
+    S->>FE: View certificate
+    FE->>API: GET /certificates/{id}
+    API->>AUTH: validateToken()
+    AUTH-->>API: student validated
+    API->>CERT: getCertificate(certificateId)
+    CERT->>DB: SELECT certificate
+    DB-->>CERT: certificate data
+    CERT-->>API: certificate details
+    API-->>FE: certificate data
+    FE-->>S: certificate displayed
+
+    Note over S,CACHE: Public Certificate Verification
+    participant V as Verifier
+    V->>FE: Verify certificate (public)
+    FE->>API: GET /verify/{certificateHash}
+    API->>CERT: verifyCertificate(certificateHash)
+    CERT->>BC: verifyBlockchainAnchor(hash)
+    BC->>BC: checkBlockchainRecord()
+    BC-->>CERT: verification result
+    CERT->>DB: getCertificateMetadata(hash)
+    DB-->>CERT: certificate metadata
+    CERT-->>API: verification response
+    API-->>FE: verification result
+    FE-->>V: certificate authenticity
+
+    Note over S,CACHE: Analytics & Reporting
+    participant PO as Placement Officer
+    PO->>FE: View analytics dashboard
+    FE->>API: GET /analytics/dashboard
+    API->>AUTH: validateToken()
+    AUTH-->>API: placement officer validated
+    API->>CACHE: getAnalyticsCache(dashboardKey)
+    CACHE-->>API: cached data (if exists)
+    
+    alt Cache Miss
+        API->>JOB: generateAnalytics(filters)
+        JOB->>DB: aggregateApplicationData()
+        JOB->>DB: aggregatePlacementData()
+        DB-->>JOB: analytics data
+        JOB->>CACHE: cacheAnalytics(data, ttl: 300)
+        JOB-->>API: analytics response
+    end
+    
+    API-->>FE: dashboard data
+    FE-->>PO: analytics dashboard
+
+    Note over S,CACHE: Real-time Notifications
+    loop Real-time Updates
+        NOTIF->>FE: WebSocket push notification
+        FE->>FE: updateUI(notification)
+        FE->>S: show notification
+    end
+
+    Note over S,CACHE: Background Jobs
+    loop Async Processing
+        AI->>CACHE: processRecommendationQueue()
+        CERT->>CACHE: processBlockchainQueue()
+        NOTIF->>CACHE: processEmailQueue()
+    end

@@ -1,0 +1,160 @@
+{
+  "test_run_timestamp": "2026-04-13T17:32:45.235300",
+  "total_tests": 19,
+  "passed_tests": 16,
+  "success_rate": "84.2%",
+  "results": [
+    {
+      "test": "Health Check",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-13T17:32:24.185181"
+    },
+    {
+      "test": "Login",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-13T17:32:24.701088"
+    },
+    {
+      "test": "Auth Me",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-13T17:32:24.877540"
+    },
+    {
+      "test": "Get Profile",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-13T17:32:25.033753"
+    },
+    {
+      "test": "Profile Strength",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-13T17:32:25.201688"
+    },
+    {
+      "test": "Next Action Intelligence",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-13T17:32:25.377790"
+    },
+    {
+      "test": "Control System",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-13T17:32:25.734824"
+    },
+    {
+      "test": "Hiring Probability",
+      "success": false,
+      "details": "API Error: Job not found",
+      "expected_status": 200,
+      "actual_status": 404,
+      "timestamp": "2026-04-13T17:32:27.568883"
+    },
+    {
+      "test": "Jobs List",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-13T17:32:28.520089"
+    },
+    {
+      "test": "Applications List",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-13T17:32:29.046685"
+    },
+    {
+      "test": "AI Recommendations",
+      "success": false,
+      "details": "Request timeout",
+      "expected_status": 200,
+      "actual_status": "TIMEOUT",
+      "timestamp": "2026-04-13T17:32:39.517559"
+    },
+    {
+      "test": "Skill Gap Analysis",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-13T17:32:44.083664"
+    },
+    {
+      "test": "Momentum System",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-13T17:32:44.244175"
+    },
+    {
+      "test": "Leaderboard",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-13T17:32:44.386981"
+    },
+    {
+      "test": "Activity Stream",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-13T17:32:44.534775"
+    },
+    {
+      "test": "Certificates List",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-13T17:32:44.752275"
+    },
+    {
+      "test": "Notifications",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-13T17:32:44.929800"
+    },
+    {
+      "test": "Interviews",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-13T17:32:45.078452"
+    },
+    {
+      "test": "Best Candidates",
+      "success": false,
+      "details": "API Error: Insufficient permissions",
+      "expected_status": 200,
+      "actual_status": 403,
+      "timestamp": "2026-04-13T17:32:45.232664"
+    }
+  ]
+}
