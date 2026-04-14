@@ -2,12 +2,16 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { api, apiPut, apiDelete, apiPost } from '@/lib/api';
 import { Users, Settings, Shield, Loader2, Trash2, Download, Activity, Database } from 'lucide-react';
 
 export default function AdminDashboard() {
   const { user } = useAuth();
-  const [tab, setTab] = useState('overview');
+  const searchParams = useSearchParams();
+  const rtr = useRouter();
+  const tab = searchParams.get('tab') || 'overview';
+  const setTab = (t: string) => rtr.push(t === 'overview' ? '/dashboard/admin' : `/dashboard/admin?tab=${t}`);
   const [users, setUsers] = useState<any[]>([]);
   const [analytics, setAnalytics] = useState<any>(null);
   const [loading, setLoading] = useState(true);

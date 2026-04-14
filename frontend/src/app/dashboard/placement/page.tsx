@@ -2,13 +2,17 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { api, apiPost } from '@/lib/api';
 import { AnalyticsOverview } from '@/types';
 import { BarChart3, Users, Briefcase, Award, TrendingUp, Loader2, Download, Mail, Activity } from 'lucide-react';
 
 export default function PlacementDashboard() {
   const { user } = useAuth();
-  const [tab, setTab] = useState('overview');
+  const searchParams = useSearchParams();
+  const rtr = useRouter();
+  const tab = searchParams.get('tab') || 'overview';
+  const setTab = (t: string) => rtr.push(t === 'overview' ? '/dashboard/placement' : `/dashboard/placement?tab=${t}`);
   const [analytics, setAnalytics] = useState<AnalyticsOverview | null>(null);
   const [placementData, setPlacementData] = useState<any>(null);
   const [users, setUsers] = useState<any[]>([]);

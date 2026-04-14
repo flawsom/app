@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { api, apiPost, apiPut } from '@/lib/api';
 import { Job, Application } from '@/types';
 import { Briefcase, Users, Plus, Loader2, X, MessageSquare, Calendar, Activity, Brain, Target } from 'lucide-react';
@@ -15,7 +16,10 @@ interface BestCandidate {
 
 export default function EmployerDashboard() {
   const { user } = useAuth();
-  const [tab, setTab] = useState('overview');
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const tab = searchParams.get('tab') || 'overview';
+  const setTab = (t: string) => router.push(t === 'overview' ? '/dashboard/employer' : `/dashboard/employer?tab=${t}`);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [applications, setApps] = useState<Application[]>([]);
   const [profile, setProfile] = useState<any>(null);

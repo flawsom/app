@@ -2,13 +2,17 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { api, apiPut } from '@/lib/api';
 import { Application } from '@/types';
 import { FileText, Users, CheckCircle, XCircle, Loader2, Clock, Activity } from 'lucide-react';
 
 export default function MentorDashboard() {
   const { user } = useAuth();
-  const [tab, setTab] = useState('overview');
+  const searchParams = useSearchParams();
+  const rtr = useRouter();
+  const tab = searchParams.get('tab') || 'overview';
+  const setTab = (t: string) => rtr.push(t === 'overview' ? '/dashboard/mentor' : `/dashboard/mentor?tab=${t}`);
   const [applications, setApps] = useState<Application[]>([]);
   const [students, setStudents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);

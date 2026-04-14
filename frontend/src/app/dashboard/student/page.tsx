@@ -2,13 +2,14 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/lib/auth-context';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { api, apiPost, apiPut } from '@/lib/api';
 import { Application, Recommendation, Certificate, Job } from '@/types';
 import {
   Brain, Briefcase, FileText, Award, Star, MapPin, Clock, ArrowRight,
   Loader2, RefreshCw, Search, Upload, ExternalLink, TrendingUp, AlertTriangle,
   Zap, Activity, Target, ChevronRight, Flame, Trophy, Crown, Rocket, User,
-  Medal, Users, BarChart3, Shield, Crosshair, Gauge
+  Medal, Users, BarChart3, Shield, Crosshair, Gauge, X
 } from 'lucide-react';
 
 interface SkillGap {
@@ -80,7 +81,10 @@ const RISK_COLORS: Record<string, string> = {
 
 export default function StudentDashboard() {
   const { user } = useAuth();
-  const [tab, setTab] = useState('overview');
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const tab = searchParams.get('tab') || 'overview';
+  const setTab = (t: string) => router.push(t === 'overview' ? '/dashboard/student' : `/dashboard/student?tab=${t}`);
   const [profile, setProfile] = useState<any>(null);
   const [recommendations, setRecs] = useState<Recommendation[]>([]);
   const [applications, setApps] = useState<Application[]>([]);
@@ -103,6 +107,8 @@ export default function StudentDashboard() {
   const [filterRemote, setFilterRemote] = useState('');
   const [editProfile, setEditProfile] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [showResume, setShowResume] = useState(false);
+  const [resumeData, setResumeData] = useState<{file_name: string; file_data: string} | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [profileForm, setProfileForm] = useState({ first_name: '', last_name: '', department: '', semester: 6, cgpa: 0, skills: '', bio: '', resume_text: '', phone: '', linkedin_url: '', github_url: '' });
   // Intelligence layer state
@@ -171,7 +177,15 @@ export default function StudentDashboard() {
   const loadLeaderboard = async (cat?: string) => { const c = cat || lbCategory; setLbLoading(true); try { const data = await api(`/api/leaderboard?category=${c}`); setLeaderboard(data); } catch (e) { console.error(e); } setLbLoading(false); };
   const applyToJob = async (jobId: string) => { setApplyingJob(jobId); try { await apiPost('/api/applications', { job_id: jobId }); await loadData(); } catch (e: any) { alert(e.message); } setApplyingJob(null); };
   const saveProfile = async () => { try { await apiPut('/api/profile', { ...profileForm, skills: profileForm.skills.split(',').map(s => s.trim()).filter(Boolean), semester: Number(profileForm.semester), cgpa: Number(profileForm.cgpa) }); setEditProfile(false); await loadData(); } catch (e: any) { alert(e.message); } };
-  const uploadResume = async (e: React.ChangeEvent<HTMLInputElement>) => { const file = e.target.files?.[0]; if (!file) return; setUploading(true); const reader = new FileReader(); reader.onload = async () => { try { await apiPost('/api/upload/resume', { file_data: reader.result as string, file_name: file.name }); await loadData(); } catch (err: any) { alert(err.message); } setUploading(false); }; reader.readAsDataURL(file); };
+  const uploadResume = async (e: React.ChangeEvent<HTMLInputElement>) => { const file = e.target.files?.[0]; if (!file) return; setUploading(true); const reader = new FileReader(); reader.onload = async () => { try { const data = reader.result as string; await apiPost('/api/upload/resume', { file_data: data, file_name: file.name }); setResumeData({ file_name: file.name, file_data: data }); await loadData(); } catch (err: any) { alert(err.message); } setUploading(false); }; reader.readAsDataURL(file); };
+
+  const loadResume = async () => {
+    if (resumeData) { setShowResume(true); return; }
+    // Try loading from profile resume_url
+    if (profile?.resume_url) {
+      setShowResume(true);
+    }
+  };
 
   const getHireProbability = async (jobId: string) => {
     if (hireProbabilities[jobId]) return;
@@ -767,7 +781,10 @@ export default function StudentDashboard() {
               <h2 className="text-sm font-semibold text-white">Profile Data</h2>
               <div className="flex gap-2">
                 <input type="file" ref={fileRef} onChange={uploadResume} accept=".pdf,.doc,.docx" className="hidden" />
-                <button onClick={() => fileRef.current?.click()} disabled={uploading} className="btn-secondary text-[10px] px-3 py-1.5 flex items-center gap-1.5 disabled:opacity-50" data-testid="upload-resume-btn"><Upload className="w-3 h-3" /> {uploading ? 'UPLOADING...' : 'RESUME'}</button>
+                <button onClick={() => fileRef.current?.click()} disabled={uploading} className="btn-secondary text-[10px] px-3 py-1.5 flex items-center gap-1.5 disabled:opacity-50" data-testid="upload-resume-btn"><Upload className="w-3 h-3" /> {uploading ? 'UPLOADING...' : 'UPLOAD'}</button>
+                {(profile?.resume_url || resumeData) && (
+                  <button onClick={() => setShowResume(true)} className="btn-secondary text-[10px] px-3 py-1.5 flex items-center gap-1.5" data-testid="view-resume-btn"><FileText className="w-3 h-3" /> VIEW RESUME</button>
+                )}
                 <button onClick={() => editProfile ? saveProfile() : setEditProfile(true)} className={editProfile ? 'btn-primary text-[10px] px-3 py-1.5' : 'btn-secondary text-[10px] px-3 py-1.5'} data-testid="edit-profile-btn">{editProfile ? 'SAVE' : 'EDIT'}</button>
               </div>
             </div>
@@ -783,6 +800,62 @@ export default function StudentDashboard() {
               <div><label className="text-[10px] font-mono text-zinc-500 block mb-1">SKILLS (COMMA-SEPARATED)</label><input value={profileForm.skills} onChange={e => setProfileForm(p => ({...p, skills: e.target.value}))} disabled={!editProfile} className="input-field" placeholder="Python, React, ML" data-testid="profile-skills" /></div>
               <div><label className="text-[10px] font-mono text-zinc-500 block mb-1">BIO</label><textarea value={profileForm.bio} onChange={e => setProfileForm(p => ({...p, bio: e.target.value}))} disabled={!editProfile} className="input-field h-16 resize-none" data-testid="profile-bio" /></div>
               <div><label className="text-[10px] font-mono text-zinc-500 block mb-1">RESUME TEXT</label><textarea value={profileForm.resume_text} onChange={e => setProfileForm(p => ({...p, resume_text: e.target.value}))} disabled={!editProfile} className="input-field h-24 resize-none" placeholder="Paste resume content for AI matching..." data-testid="profile-resume" /></div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ RESUME VIEWER MODAL ═══ */}
+      {showResume && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" data-testid="resume-viewer-modal">
+          <div className="dash-container border rounded-lg w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col" style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}>
+            <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="flex items-center gap-2">
+                <FileText className="w-4 h-4 text-[var(--cyan)]" />
+                <h2 className="text-sm font-bold">Resume</h2>
+                {resumeData && <span className="text-[10px] font-mono text-[var(--text-muted)]">{resumeData.file_name}</span>}
+              </div>
+              <div className="flex items-center gap-2">
+                {profile?.resume_url && (
+                  <a href={`${process.env.NEXT_PUBLIC_API_URL}${profile.resume_url}`} target="_blank"
+                    className="btn-secondary text-[10px] px-3 py-1.5 flex items-center gap-1" data-testid="download-resume-btn">
+                    <ExternalLink className="w-3 h-3" /> DOWNLOAD
+                  </a>
+                )}
+                <button onClick={() => setShowResume(false)} className="p-1.5 hover:bg-white/5 rounded transition-colors" data-testid="close-resume-modal">
+                  <X className="w-4 h-4 text-[var(--text-muted)]" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto p-5">
+              {resumeData?.file_data ? (
+                resumeData.file_data.startsWith('data:application/pdf') ? (
+                  <iframe src={resumeData.file_data} className="w-full h-[70vh] rounded border" style={{ borderColor: 'var(--border-subtle)' }} title="Resume PDF" />
+                ) : (
+                  <div className="text-center py-10">
+                    <FileText className="w-12 h-12 text-[var(--text-muted)] mx-auto mb-3" />
+                    <p className="text-sm text-[var(--text-secondary)] mb-2">Resume uploaded: <strong>{resumeData.file_name}</strong></p>
+                    <a href={`${process.env.NEXT_PUBLIC_API_URL}/api/download/resume/${user?.id}`} target="_blank"
+                      className="btn-primary text-[10px] px-4 py-2 inline-flex items-center gap-1.5" data-testid="open-resume-link">
+                      <ExternalLink className="w-3 h-3" /> Open in New Tab
+                    </a>
+                  </div>
+                )
+              ) : profile?.resume_url ? (
+                <div className="text-center py-10">
+                  <FileText className="w-12 h-12 text-[var(--cyan)] mx-auto mb-3" />
+                  <p className="text-sm text-[var(--text-secondary)] mb-4">Resume is stored on server</p>
+                  <a href={`${process.env.NEXT_PUBLIC_API_URL}${profile.resume_url}`} target="_blank"
+                    className="btn-primary text-[10px] px-4 py-2 inline-flex items-center gap-1.5" data-testid="open-resume-link">
+                    <ExternalLink className="w-3 h-3" /> Open Resume
+                  </a>
+                </div>
+              ) : (
+                <div className="text-center py-10">
+                  <Upload className="w-12 h-12 text-[var(--text-muted)] mx-auto mb-3" />
+                  <p className="text-sm text-[var(--text-muted)]">No resume uploaded yet</p>
+                </div>
+              )}
             </div>
           </div>
         </div>

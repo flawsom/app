@@ -642,6 +642,14 @@ async def download_resume(user_id: str):
     data = base64.b64decode(doc["file_data"].split(",")[-1] if "," in doc["file_data"] else doc["file_data"])
     return StreamingResponse(io.BytesIO(data), media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename={doc['file_name']}"})
 
+@app.get("/api/resume/info")
+async def resume_info(request: Request):
+    user = await require_role("student")(request)
+    doc = await db.uploads.find_one({"user_id": user["id"], "type": "resume"}, {"file_data": 0})
+    if not doc: return {"has_resume": False}
+    doc.pop("_id", None)
+    return {"has_resume": True, "file_name": doc.get("file_name", ""), "uploaded_at": doc.get("uploaded_at", "")}
+
 # ─── CSV Export ───────────────────────────────────────────────────
 @app.get("/api/export/applications")
 async def export_applications_csv(request: Request):
