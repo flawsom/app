@@ -1,8 +1,8 @@
 {
-  "test_run_timestamp": "2026-04-13T17:32:45.235300",
+  "test_run_timestamp": "2026-04-14T14:59:18.878546",
   "total_tests": 19,
-  "passed_tests": 16,
-  "success_rate": "84.2%",
+  "passed_tests": 17,
+  "success_rate": "89.5%",
   "results": [
     {
       "test": "Health Check",
@@ -10,7 +10,7 @@
       "details": "",
       "expected_status": null,
       "actual_status": null,
-      "timestamp": "2026-04-13T17:32:24.185181"
+      "timestamp": "2026-04-14T14:59:05.433948"
     },
     {
       "test": "Login",
@@ -18,7 +18,7 @@
       "details": "",
       "expected_status": null,
       "actual_status": null,
-      "timestamp": "2026-04-13T17:32:24.701088"
+      "timestamp": "2026-04-14T14:59:06.124693"
     },
     {
       "test": "Auth Me",
@@ -26,7 +26,7 @@
       "details": "",
       "expected_status": null,
       "actual_status": null,
-      "timestamp": "2026-04-13T17:32:24.877540"
+      "timestamp": "2026-04-14T14:59:06.696014"
     },
     {
       "test": "Get Profile",
@@ -34,7 +34,7 @@
       "details": "",
       "expected_status": null,
       "actual_status": null,
-      "timestamp": "2026-04-13T17:32:25.033753"
+      "timestamp": "2026-04-14T14:59:07.317718"
     },
     {
       "test": "Profile Strength",
@@ -42,7 +42,7 @@
       "details": "",
       "expected_status": null,
       "actual_status": null,
-      "timestamp": "2026-04-13T17:32:25.201688"
+      "timestamp": "2026-04-14T14:59:08.039822"
     },
     {
       "test": "Next Action Intelligence",
@@ -50,7 +50,7 @@
       "details": "",
       "expected_status": null,
       "actual_status": null,
-      "timestamp": "2026-04-13T17:32:25.377790"
+      "timestamp": "2026-04-14T14:59:08.745927"
     },
     {
       "test": "Control System",
@@ -58,7 +58,7 @@
       "details": "",
       "expected_status": null,
       "actual_status": null,
-      "timestamp": "2026-04-13T17:32:25.734824"
+      "timestamp": "2026-04-14T14:59:09.458792"
     },
     {
       "test": "Hiring Probability",
@@ -66,7 +66,7 @@
       "details": "API Error: Job not found",
       "expected_status": 200,
       "actual_status": 404,
-      "timestamp": "2026-04-13T17:32:27.568883"
+      "timestamp": "2026-04-14T14:59:10.098257"
     },
     {
       "test": "Jobs List",
@@ -74,7 +74,7 @@
       "details": "",
       "expected_status": null,
       "actual_status": null,
-      "timestamp": "2026-04-13T17:32:28.520089"
+      "timestamp": "2026-04-14T14:59:10.781798"
     },
     {
       "test": "Applications List",
@@ -82,15 +82,15 @@
       "details": "",
       "expected_status": null,
       "actual_status": null,
-      "timestamp": "2026-04-13T17:32:29.046685"
+      "timestamp": "2026-04-14T14:59:11.180497"
     },
     {
       "test": "AI Recommendations",
-      "success": false,
-      "details": "Request timeout",
-      "expected_status": 200,
-      "actual_status": "TIMEOUT",
-      "timestamp": "2026-04-13T17:32:39.517559"
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T14:59:11.636747"
     },
     {
       "test": "Skill Gap Analysis",
@@ -98,7 +98,7 @@
       "details": "",
       "expected_status": null,
       "actual_status": null,
-      "timestamp": "2026-04-13T17:32:44.083664"
+      "timestamp": "2026-04-14T14:59:12.158136"
     },
     {
       "test": "Momentum System",
@@ -106,7 +106,7 @@
       "details": "",
       "expected_status": null,
       "actual_status": null,
-      "timestamp": "2026-04-13T17:32:44.244175"
+      "timestamp": "2026-04-14T14:59:12.730082"
     },
     {
       "test": "Leaderboard",
@@ -114,7 +114,7 @@
       "details": "",
       "expected_status": null,
       "actual_status": null,
-      "timestamp": "2026-04-13T17:32:44.386981"
+      "timestamp": "2026-04-14T14:59:13.209711"
     },
     {
       "test": "Activity Stream",
@@ -122,7 +122,7 @@
       "details": "",
       "expected_status": null,
       "actual_status": null,
-      "timestamp": "2026-04-13T17:32:44.534775"
+      "timestamp": "2026-04-14T14:59:14.147795"
     },
     {
       "test": "Certificates List",
@@ -130,7 +130,7 @@
       "details": "",
       "expected_status": null,
       "actual_status": null,
-      "timestamp": "2026-04-13T17:32:44.752275"
+      "timestamp": "2026-04-14T14:59:15.085792"
     },
     {
       "test": "Notifications",
@@ -138,7 +138,7 @@
       "details": "",
       "expected_status": null,
       "actual_status": null,
-      "timestamp": "2026-04-13T17:32:44.929800"
+      "timestamp": "2026-04-14T14:59:15.824744"
     },
     {
       "test": "Interviews",
@@ -146,7 +146,7 @@
       "details": "",
       "expected_status": null,
       "actual_status": null,
-      "timestamp": "2026-04-13T17:32:45.078452"
+      "timestamp": "2026-04-14T14:59:16.657404"
     },
     {
       "test": "Best Candidates",
@@ -154,7 +154,7 @@
       "details": "API Error: Insufficient permissions",
       "expected_status": 200,
       "actual_status": 403,
-      "timestamp": "2026-04-13T17:32:45.232664"
+      "timestamp": "2026-04-14T14:59:18.874897"
     }
   ]
 }

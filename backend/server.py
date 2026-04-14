@@ -1,89 +1,984 @@
-from fastapi import FastAPI, APIRouter
-from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
+# server.py — UNIFY: Adaptive Placement Intelligence Platform
+from fastapi import FastAPI, Request, Response, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from datetime import datetime, timezone, timedelta
 from motor.motor_asyncio import AsyncIOMotorClient
-import os
-import logging
-from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List
-import uuid
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager
+from typing import Optional, List
+from bson import ObjectId
+from dotenv import load_dotenv
+import os, jwt, bcrypt, hashlib, secrets, json, asyncio, csv, io, base64
 
+load_dotenv()
+MONGO_URL = os.getenv("MONGO_URL")
+DB_NAME = os.getenv("DB_NAME")
+JWT_SECRET = os.getenv("JWT_SECRET", "secret")
+JWT_ALGORITHM = "HS256"
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@example.com")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+EMERGENT_LLM_KEY = os.getenv("EMERGENT_LLM_KEY", "")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
-ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+client = AsyncIOMotorClient(MONGO_URL)
+db = client[DB_NAME]
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+# ─── Pydantic Models ──────────────────────────────────────────────
+class LoginReq(BaseModel):
+    email: str
+    password: str
+class RegisterReq(BaseModel):
+    email: str; password: str; name: str; role: str
+class ProfileUpdate(BaseModel):
+    first_name: Optional[str] = None; last_name: Optional[str] = None
+    department: Optional[str] = None; semester: Optional[int] = None
+    cgpa: Optional[float] = None; phone: Optional[str] = None
+    linkedin_url: Optional[str] = None; github_url: Optional[str] = None
+    resume_text: Optional[str] = None; skills: Optional[List[str]] = None
+    bio: Optional[str] = None; company_name: Optional[str] = None
+    company_website: Optional[str] = None; industry: Optional[str] = None
+    contact_person: Optional[str] = None; contact_email: Optional[str] = None
+    contact_phone: Optional[str] = None; address: Optional[str] = None
+    designation: Optional[str] = None; specialization: Optional[List[str]] = None
+    office_location: Optional[str] = None
+class JobCreate(BaseModel):
+    title: str; description: str; job_type: str = "internship"
+    location: Optional[str] = None; is_remote: bool = False
+    stipend_min: Optional[int] = None; stipend_max: Optional[int] = None
+    duration_months: Optional[int] = None; required_skills: List[str] = []
+    application_deadline: Optional[str] = None; status: str = "active"
+class ApplicationCreate(BaseModel):
+    job_id: str; cover_letter: Optional[str] = None
+class CertificateCreate(BaseModel):
+    student_id: str; application_id: Optional[str] = None
+    certificate_type: str = "internship_completion"; title: str
+    description: Optional[str] = None; issuer_name: Optional[str] = None
+class FeedbackReq(BaseModel):
+    feedback: str; rating: Optional[int] = None
+class InterviewCreate(BaseModel):
+    application_id: str; interview_type: str = "video"
+    scheduled_date: str; duration_minutes: int = 60
+    location: Optional[str] = None; meeting_link: Optional[str] = None
 
-# Create the main app without a prefix
-app = FastAPI()
+# ─── Auth Utilities ───────────────────────────────────────────────
+def hash_password(pw: str) -> str:
+    return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
+def verify_password(plain: str, hashed: str) -> bool:
+    return bcrypt.checkpw(plain.encode(), hashed.encode())
+def create_access_token(uid: str, email: str) -> str:
+    return jwt.encode({"sub": uid, "email": email, "exp": datetime.now(timezone.utc) + timedelta(hours=1), "type": "access"}, JWT_SECRET, algorithm=JWT_ALGORITHM)
+def create_refresh_token(uid: str) -> str:
+    return jwt.encode({"sub": uid, "exp": datetime.now(timezone.utc) + timedelta(days=7), "type": "refresh"}, JWT_SECRET, algorithm=JWT_ALGORITHM)
+def clean_user(u):
+    if not u: return None
+    u["_id"] = str(u["_id"]); u["id"] = u["_id"]; u.pop("password_hash", None); return u
 
-# Create a router with the /api prefix
-api_router = APIRouter(prefix="/api")
+IS_PRODUCTION = "unifies.codes" in FRONTEND_URL
+COOKIE_KW = {"httponly": True, "secure": IS_PRODUCTION, "samesite": "none" if IS_PRODUCTION else "lax", "path": "/"}
+if IS_PRODUCTION: COOKIE_KW["domain"] = ".unifies.codes"
 
+def set_auth_cookies(resp, access, refresh):
+    resp.set_cookie("access_token", access, max_age=3600, **COOKIE_KW)
+    resp.set_cookie("refresh_token", refresh, max_age=604800, **COOKIE_KW)
+def clear_auth_cookies(resp):
+    kw = {"path": "/"}
+    if IS_PRODUCTION: kw["domain"] = ".unifies.codes"
+    resp.delete_cookie("access_token", **kw); resp.delete_cookie("refresh_token", **kw)
 
-# Define Models
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # Ignore MongoDB's _id field
-    
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+async def get_current_user(request: Request) -> dict:
+    token = request.cookies.get("access_token")
+    if not token:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "): token = auth[7:]
+    if not token: raise HTTPException(401, "Not authenticated")
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        if payload.get("type") != "access": raise HTTPException(401, "Invalid token type")
+        user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
+        if not user: raise HTTPException(401, "User not found")
+        return clean_user(user)
+    except jwt.ExpiredSignatureError: raise HTTPException(401, "Token expired")
+    except jwt.InvalidTokenError: raise HTTPException(401, "Invalid token")
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
+def require_role(*roles):
+    async def checker(request: Request):
+        user = await get_current_user(request)
+        if user["role"] not in roles: raise HTTPException(403, "Insufficient permissions")
+        return user
+    return checker
 
-# Add your routes to the router instead of directly to app
-@api_router.get("/")
-async def root():
-    return {"message": "Hello World"}
+# ─── Helpers ──────────────────────────────────────────────────────
+class ConnectionManager:
+    def __init__(self): self.connections: dict = {}
+    async def connect(self, ws, uid): await ws.accept(); self.connections.setdefault(uid, []).append(ws)
+    def disconnect(self, ws, uid):
+        if uid in self.connections: self.connections[uid] = [c for c in self.connections[uid] if c != ws]
+    async def send_to_user(self, uid, msg):
+        for ws in self.connections.get(uid, []):
+            try: await ws.send_json(msg)
+            except: pass
+    async def broadcast(self, msg):
+        for conns in self.connections.values():
+            for ws in conns:
+                try: await ws.send_json(msg)
+                except: pass
+ws_manager = ConnectionManager()
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.model_dump()
-    status_obj = StatusCheck(**status_dict)
-    
-    # Convert to dict and serialize datetime to ISO string for MongoDB
-    doc = status_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
-    
-    _ = await db.status_checks.insert_one(doc)
-    return status_obj
+async def create_notification(uid, title, message, ntype="info", action_url=None):
+    notif = {"user_id": uid, "title": title, "message": message, "type": ntype, "read": False, "action_url": action_url, "created_at": datetime.now(timezone.utc).isoformat()}
+    r = await db.notifications.insert_one(notif); notif["_id"] = str(r.inserted_id); notif["id"] = notif["_id"]
+    await ws_manager.send_to_user(uid, {"type": "notification", "data": notif}); return notif
 
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
-    
-    # Convert ISO string timestamps back to datetime objects
-    for check in status_checks:
-        if isinstance(check['timestamp'], str):
-            check['timestamp'] = datetime.fromisoformat(check['timestamp'])
-    
-    return status_checks
+async def audit_log(uid, action, details=None, ip=None):
+    await db.audit_logs.insert_one({"user_id": uid, "action": action, "details": details or {}, "ip_address": ip, "created_at": datetime.now(timezone.utc).isoformat()})
 
-# Include the router in the main app
-app.include_router(api_router)
+# ─── Seed ─────────────────────────────────────────────────────────
+DEMO_ACCOUNTS = [
+    {"email": "mentor@unify.com", "password": "mentor123", "name": "Dr. Sarah Mitchell", "role": "mentor"},
+    {"email": "employer@unify.com", "password": "employer123", "name": "TechCorp Solutions", "role": "employer"},
+    {"email": "placement@unify.com", "password": "placement123", "name": "Placement Officer", "role": "placement"},
+]
+async def seed_database():
+    now = datetime.now(timezone.utc).isoformat()
+    admin = await db.users.find_one({"email": ADMIN_EMAIL})
+    if not admin:
+        await db.users.insert_one({"email": ADMIN_EMAIL, "password_hash": hash_password(ADMIN_PASSWORD), "name": "System Admin", "role": "admin", "is_active": True, "created_at": now, "updated_at": now})
+    elif not verify_password(ADMIN_PASSWORD, admin["password_hash"]):
+        await db.users.update_one({"email": ADMIN_EMAIL}, {"$set": {"password_hash": hash_password(ADMIN_PASSWORD)}})
+    for acct in DEMO_ACCOUNTS:
+        existing = await db.users.find_one({"email": acct["email"]})
+        if existing:
+            if not verify_password(acct["password"], existing["password_hash"]):
+                await db.users.update_one({"email": acct["email"]}, {"$set": {"password_hash": hash_password(acct["password"])}})
+            continue
+        doc = {"email": acct["email"], "password_hash": hash_password(acct["password"]), "name": acct["name"], "role": acct["role"], "is_active": True, "created_at": now, "updated_at": now}
+        r = await db.users.insert_one(doc); uid = str(r.inserted_id)
+        if acct["role"] == "mentor":
+            await db.mentor_profiles.update_one({"user_id": uid}, {"$set": {"user_id": uid, "first_name": "Sarah", "last_name": "Mitchell", "department": "Computer Science", "designation": "Professor", "created_at": now}}, upsert=True)
+        elif acct["role"] == "employer":
+            await db.employer_profiles.update_one({"user_id": uid}, {"$set": {"user_id": uid, "company_name": "TechCorp Solutions", "industry": "Technology", "verification_status": "verified", "created_at": now}}, upsert=True)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+async def create_indexes():
+    await db.users.create_index("email", unique=True)
+    for col in ["student_profiles", "mentor_profiles", "employer_profiles"]: await db[col].create_index("user_id", unique=True)
+    await db.job_postings.create_index("status"); await db.job_postings.create_index("employer_id")
+    await db.applications.create_index([("student_id", 1), ("job_id", 1)], unique=True); await db.applications.create_index("status")
+    await db.certificates.create_index("blockchain_hash"); await db.certificates.create_index("student_id")
+    await db.notifications.create_index("user_id"); await db.audit_logs.create_index("user_id")
+    await db.login_attempts.create_index("identifier"); await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+@asynccontextmanager
+async def lifespan(app):
+    await create_indexes(); await seed_database(); yield
 
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
+app = FastAPI(title="UNIFY API", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=[FRONTEND_URL, "https://www.unifies.codes", "https://unifies.codes"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+# ─── Health ───────────────────────────────────────────────────────
+@app.get("/api/health")
+async def health():
+    return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+@app.options("/{full_path:path}")
+async def options_handler():
+    return {"ok": True}
+
+# ─── Auth Routes ──────────────────────────────────────────────────
+@app.post("/api/auth/register")
+async def register(req: RegisterReq, response: Response, request: Request):
+    email = req.email.lower().strip()
+    if req.role not in ["student", "mentor", "placement", "employer"]: raise HTTPException(400, "Invalid role")
+    if await db.users.find_one({"email": email}): raise HTTPException(400, "Email already registered")
+    now = datetime.now(timezone.utc).isoformat()
+    user_doc = {"email": email, "password_hash": hash_password(req.password), "name": req.name, "role": req.role, "is_active": True, "created_at": now, "updated_at": now}
+    r = await db.users.insert_one(user_doc); uid = str(r.inserted_id)
+    if req.role == "student":
+        parts = req.name.split(" ", 1)
+        await db.student_profiles.insert_one({"user_id": uid, "first_name": parts[0], "last_name": parts[1] if len(parts) > 1 else "", "skills": [], "created_at": now, "updated_at": now})
+    elif req.role == "mentor":
+        parts = req.name.split(" ", 1)
+        await db.mentor_profiles.insert_one({"user_id": uid, "first_name": parts[0], "last_name": parts[1] if len(parts) > 1 else "", "created_at": now})
+    elif req.role == "employer":
+        await db.employer_profiles.insert_one({"user_id": uid, "company_name": req.name, "verification_status": "pending", "created_at": now})
+    access = create_access_token(uid, email); refresh = create_refresh_token(uid)
+    set_auth_cookies(response, access, refresh)
+    await audit_log(uid, "register", {"role": req.role}, request.client.host if request.client else None)
+    user_doc["_id"] = uid; user_doc["id"] = uid; user_doc.pop("password_hash", None); user_doc["access_token"] = access
+    return user_doc
+
+@app.post("/api/auth/login")
+async def login(req: LoginReq, response: Response, request: Request):
+    email = req.email.lower().strip()
+    ip = request.client.host if request.client else "unknown"
+    identifier = f"{ip}:{email}"
+    attempt = await db.login_attempts.find_one({"identifier": identifier})
+    if attempt and attempt.get("attempts", 0) >= 5:
+        locked = attempt.get("locked_until")
+        if locked and datetime.fromisoformat(locked) > datetime.now(timezone.utc): raise HTTPException(429, "Too many failed attempts")
+        else: await db.login_attempts.delete_one({"identifier": identifier})
+    user = await db.users.find_one({"email": email})
+    if not user or not verify_password(req.password, user["password_hash"]):
+        await db.login_attempts.update_one({"identifier": identifier}, {"$inc": {"attempts": 1}, "$set": {"locked_until": (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()}}, upsert=True)
+        raise HTTPException(401, "Invalid email or password")
+    await db.login_attempts.delete_one({"identifier": identifier})
+    uid = str(user["_id"]); access = create_access_token(uid, email); refresh = create_refresh_token(uid)
+    set_auth_cookies(response, access, refresh)
+    await audit_log(uid, "login", {}, ip)
+    result = clean_user(user); result["access_token"] = access; return result
+
+@app.post("/api/auth/logout")
+async def logout(response: Response, request: Request):
+    user = await get_current_user(request); clear_auth_cookies(response)
+    await audit_log(user["id"], "logout"); return {"message": "Logged out"}
+
+@app.get("/api/auth/me")
+async def me(request: Request):
+    return await get_current_user(request)
+
+@app.post("/api/auth/refresh")
+async def refresh(request: Request, response: Response):
+    token = request.cookies.get("refresh_token")
+    if not token: raise HTTPException(401, "No refresh token")
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        if payload.get("type") != "refresh": raise HTTPException(401, "Invalid token type")
+        user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
+        if not user: raise HTTPException(401, "User not found")
+        uid = str(user["_id"]); access = create_access_token(uid, user["email"])
+        resp_kw = dict(COOKIE_KW); resp_kw["max_age"] = 3600
+        response.set_cookie("access_token", access, **resp_kw)
+        return {"message": "Token refreshed", "access_token": access}
+    except jwt.ExpiredSignatureError: raise HTTPException(401, "Refresh token expired")
+    except jwt.InvalidTokenError: raise HTTPException(401, "Invalid refresh token")
+
+@app.post("/api/auth/forgot-password")
+async def forgot_password(request: Request):
+    body = await request.json(); email = body.get("email", "").lower().strip()
+    user = await db.users.find_one({"email": email})
+    if not user: return {"message": "If the email exists, a reset link has been sent"}
+    token = secrets.token_urlsafe(32)
+    await db.password_reset_tokens.insert_one({"user_id": str(user["_id"]), "token": token, "expires_at": datetime.now(timezone.utc) + timedelta(hours=1), "used": False, "created_at": datetime.now(timezone.utc).isoformat()})
+    return {"message": "If the email exists, a reset link has been sent", "reset_token": token}
+
+@app.post("/api/auth/reset-password")
+async def reset_password(request: Request):
+    body = await request.json(); token = body.get("token", ""); new_pw = body.get("password", "")
+    if len(new_pw) < 6: raise HTTPException(400, "Password must be at least 6 characters")
+    reset = await db.password_reset_tokens.find_one({"token": token, "used": False})
+    if not reset: raise HTTPException(400, "Invalid or expired reset token")
+    await db.users.update_one({"_id": ObjectId(reset["user_id"])}, {"$set": {"password_hash": hash_password(new_pw)}})
+    await db.password_reset_tokens.update_one({"_id": reset["_id"]}, {"$set": {"used": True}})
+    return {"message": "Password reset successfully"}
+
+# ─── User Routes ──────────────────────────────────────────────────
+@app.get("/api/users")
+async def list_users(request: Request, role: Optional[str] = None, page: int = 1, limit: int = 20):
+    await require_role("admin", "placement")(request)
+    query = {}
+    if role: query["role"] = role
+    total = await db.users.count_documents(query)
+    users = await db.users.find(query, {"password_hash": 0}).skip((page-1)*limit).limit(limit).to_list(limit)
+    for u in users: u["_id"] = str(u["_id"]); u["id"] = u["_id"]
+    return {"users": users, "total": total, "page": page, "limit": limit}
+
+@app.put("/api/users/{user_id}")
+async def update_user(user_id: str, request: Request):
+    await require_role("admin")(request)
+    body = await request.json(); update = {k: v for k, v in body.items() if k in {"name", "role", "is_active"}}
+    if not update: raise HTTPException(400, "No valid fields")
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": update}); return {"message": "User updated"}
+
+@app.delete("/api/users/{user_id}")
+async def delete_user(user_id: str, request: Request):
+    await require_role("admin")(request)
+    await db.users.delete_one({"_id": ObjectId(user_id)}); return {"message": "User deleted"}
+
+# ─── Profile Routes ───────────────────────────────────────────────
+@app.get("/api/profile")
+async def get_profile(request: Request):
+    user = await get_current_user(request)
+    profile = None
+    if user["role"] == "student": profile = await db.student_profiles.find_one({"user_id": user["id"]})
+    elif user["role"] == "mentor": profile = await db.mentor_profiles.find_one({"user_id": user["id"]})
+    elif user["role"] == "employer": profile = await db.employer_profiles.find_one({"user_id": user["id"]})
+    if profile: profile["_id"] = str(profile["_id"]); profile["id"] = profile["_id"]
+    return {"user": user, "profile": profile}
+
+@app.put("/api/profile")
+async def update_profile(req: ProfileUpdate, request: Request):
+    user = await get_current_user(request)
+    data = {k: v for k, v in req.dict(exclude_none=True).items()}; data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    col = {"student": "student_profiles", "mentor": "mentor_profiles", "employer": "employer_profiles"}.get(user["role"])
+    if col: await db[col].update_one({"user_id": user["id"]}, {"$set": data}, upsert=True)
+    if "first_name" in data:
+        await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": {"name": f"{data.get('first_name','')} {data.get('last_name','')}".strip()}})
+    return {"message": "Profile updated"}
+
+@app.get("/api/profile/strength")
+async def profile_strength(request: Request):
+    user = await get_current_user(request)
+    profile = await db.student_profiles.find_one({"user_id": user["id"]}) if user["role"] == "student" else None
+    if not profile: return {"score": 0, "max_score": 100, "sections": [], "suggestions": ["Complete your profile"]}
+    checks = [("first_name","First Name",10),("last_name","Last Name",10),("department","Department",10),("cgpa","CGPA",10),("bio","Bio",15),("skills","Skills (3+)",20),("resume_text","Resume",15),("phone","Phone",5),("linkedin_url","LinkedIn",5)]
+    sections, suggestions, total = [], [], 0
+    for field, label, weight in checks:
+        val = profile.get(field)
+        filled = (isinstance(val, list) and len(val) >= 3) if field == "skills" else (val is not None and val > 0) if field == "cgpa" else bool(val)
+        sections.append({"field": field, "label": label, "weight": weight, "filled": filled})
+        if filled: total += weight
+        else: suggestions.append(f"Add your {label.lower()}")
+    return {"score": total, "max_score": 100, "sections": sections, "suggestions": suggestions[:5]}
+
+# ─── Job Routes ───────────────────────────────────────────────────
+@app.get("/api/jobs")
+async def list_jobs(request: Request, status: Optional[str] = None, job_type: Optional[str] = None, search: Optional[str] = None, page: int = 1, limit: int = 20):
+    query = {}
+    try:
+        user = await get_current_user(request)
+        if user["role"] == "employer":
+            emp = await db.employer_profiles.find_one({"user_id": user["id"]})
+            if emp: query["employer_id"] = str(emp["_id"])
+    except Exception:
+        query["status"] = "active"
+    if status: query["status"] = status
+    if job_type: query["job_type"] = job_type
+    if search: query["$or"] = [{"title": {"$regex": search, "$options": "i"}}, {"description": {"$regex": search, "$options": "i"}}, {"company_name": {"$regex": search, "$options": "i"}}]
+    total = await db.job_postings.count_documents(query)
+    jobs = await db.job_postings.find(query).sort("created_at", -1).skip((page-1)*limit).limit(limit).to_list(limit)
+    for j in jobs: j["_id"] = str(j["_id"]); j["id"] = j["_id"]; j["application_count"] = await db.applications.count_documents({"job_id": j["id"]})
+    return {"jobs": jobs, "total": total, "page": page, "limit": limit}
+
+@app.post("/api/jobs")
+async def create_job(req: JobCreate, request: Request):
+    user = await require_role("employer", "placement", "admin")(request)
+    emp = await db.employer_profiles.find_one({"user_id": user["id"]})
+    doc = req.dict(); doc["employer_id"] = str(emp["_id"]) if emp else user["id"]; doc["employer_user_id"] = user["id"]
+    doc["company_name"] = emp["company_name"] if emp else user.get("name", "Unknown")
+    doc["created_at"] = datetime.now(timezone.utc).isoformat(); doc["updated_at"] = doc["created_at"]
+    if not doc.get("application_deadline"): doc["application_deadline"] = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    r = await db.job_postings.insert_one(doc); doc["_id"] = str(r.inserted_id); doc["id"] = doc["_id"]
+    return doc
+
+@app.get("/api/jobs/{job_id}")
+async def get_job(job_id: str):
+    job = await db.job_postings.find_one({"_id": ObjectId(job_id)})
+    if not job: raise HTTPException(404, "Job not found")
+    job["_id"] = str(job["_id"]); job["id"] = job["_id"]; return job
+
+# ─── Application Routes ──────────────────────────────────────────
+@app.post("/api/applications")
+async def create_application(req: ApplicationCreate, request: Request):
+    user = await require_role("student")(request)
+    if await db.applications.find_one({"student_id": user["id"], "job_id": req.job_id}): raise HTTPException(400, "Already applied")
+    job = await db.job_postings.find_one({"_id": ObjectId(req.job_id)})
+    if not job: raise HTTPException(404, "Job not found")
+    mentor = await db.mentor_profiles.find_one({}); mentor_id = str(mentor["user_id"]) if mentor else None
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {"student_id": user["id"], "student_name": user.get("name",""), "job_id": req.job_id, "job_title": job.get("title",""),
+           "company_name": job.get("company_name",""), "cover_letter": req.cover_letter, "status": "submitted",
+           "mentor_approval_status": "pending", "mentor_id": mentor_id, "matching_score": 0, "applied_at": now, "updated_at": now}
+    r = await db.applications.insert_one(doc); doc["_id"] = str(r.inserted_id); doc["id"] = doc["_id"]
+    if mentor_id: await create_notification(mentor_id, "New Application", f"{user['name']} applied to {job['title']}", "info")
+    if job.get("employer_user_id"): await create_notification(job["employer_user_id"], "New Application", f"Application for {job['title']}", "info")
+    await audit_log(user["id"], "apply", {"job_id": req.job_id})
+    # Track behavior
+    await db.behavior_events.insert_one({"user_id": user["id"], "event_type": "apply", "target": req.job_id, "created_at": now})
+    rec_cache = await db.recommendations_cache.find_one({"user_id": user["id"]})
+    if rec_cache:
+        rec_ids = [r.get("job_id") for r in rec_cache.get("recommendations", [])]
+        if req.job_id in rec_ids:
+            await db.recommendations_followed.insert_one({"user_id": user["id"], "job_id": req.job_id, "created_at": now})
+    return doc
+
+@app.get("/api/applications")
+async def list_applications(request: Request, status: Optional[str] = None, page: int = 1, limit: int = 50):
+    user = await get_current_user(request); query = {}
+    if user["role"] == "student": query["student_id"] = user["id"]
+    elif user["role"] == "mentor": query["mentor_id"] = user["id"]
+    elif user["role"] == "employer":
+        emp = await db.employer_profiles.find_one({"user_id": user["id"]})
+        if emp:
+            jobs = await db.job_postings.find({"employer_id": str(emp["_id"])}).to_list(1000)
+            query["job_id"] = {"$in": [str(j["_id"]) for j in jobs]}
+    if status: query["status"] = status
+    total = await db.applications.count_documents(query)
+    apps = await db.applications.find(query).sort("applied_at", -1).skip((page-1)*limit).limit(limit).to_list(limit)
+    for a in apps: a["_id"] = str(a["_id"]); a["id"] = a["_id"]
+    return {"applications": apps, "total": total, "page": page, "limit": limit}
+
+@app.get("/api/applications/{app_id}")
+async def get_application(app_id: str, request: Request):
+    await get_current_user(request)
+    doc = await db.applications.find_one({"_id": ObjectId(app_id)})
+    if not doc: raise HTTPException(404, "Application not found")
+    doc["_id"] = str(doc["_id"]); doc["id"] = doc["_id"]; return doc
+
+@app.put("/api/applications/{app_id}/status")
+async def update_application_status(app_id: str, request: Request):
+    user = await require_role("employer", "placement", "admin")(request)
+    body = await request.json(); new_status = body.get("status")
+    if new_status not in ["under_review", "shortlisted", "interview_scheduled", "selected", "rejected"]: raise HTTPException(400, "Invalid status")
+    update = {"status": new_status, "updated_at": datetime.now(timezone.utc).isoformat()}
+    if body.get("feedback"): update["employer_feedback"] = body["feedback"]
+    await db.applications.update_one({"_id": ObjectId(app_id)}, {"$set": update})
+    app_doc = await db.applications.find_one({"_id": ObjectId(app_id)})
+    if app_doc:
+        await create_notification(app_doc["student_id"], f"Application {new_status.replace('_',' ').title()}", f"Your application for {app_doc.get('job_title','')} has been {new_status.replace('_',' ')}", "info")
+    await audit_log(user["id"], "update_app_status", {"app_id": app_id, "status": new_status})
+    # Auto-learn on terminal outcomes
+    if new_status in ("selected", "rejected") and app_doc:
+        outcome = "hired" if new_status == "selected" else "rejected"
+        pred = await db.probability_predictions.find_one({"user_id": app_doc["student_id"], "job_id": app_doc.get("job_id")})
+        factors = pred.get("factors", {}) if pred else {}
+        await _adapt_weights(outcome, factors)
+        await db.hiring_outcomes.update_one({"application_id": app_id}, {"$set": {"application_id": app_id, "user_id": app_doc["student_id"], "job_id": app_doc.get("job_id"), "outcome": outcome, "recorded_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+    return {"message": "Status updated"}
+
+@app.put("/api/applications/{app_id}/mentor-review")
+async def mentor_review(app_id: str, request: Request):
+    user = await require_role("mentor")(request); body = await request.json(); approval = body.get("approval")
+    if approval not in ["approved", "rejected"]: raise HTTPException(400, "Invalid")
+    update = {"mentor_approval_status": approval, "mentor_comments": body.get("comments",""), "updated_at": datetime.now(timezone.utc).isoformat()}
+    if approval == "approved": update["status"] = "under_review"
+    await db.applications.update_one({"_id": ObjectId(app_id)}, {"$set": update})
+    app_doc = await db.applications.find_one({"_id": ObjectId(app_id)})
+    if app_doc: await create_notification(app_doc["student_id"], f"Mentor {approval.title()}", f"Application for {app_doc.get('job_title','')} was {approval}", "info")
+    return {"message": f"Application {approval}"}
+
+@app.put("/api/applications/{app_id}/feedback")
+async def employer_feedback(app_id: str, req: FeedbackReq, request: Request):
+    user = await require_role("employer")(request)
+    await db.applications.update_one({"_id": ObjectId(app_id)}, {"$set": {"employer_feedback": req.feedback, "employer_rating": req.rating, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    app_doc = await db.applications.find_one({"_id": ObjectId(app_id)})
+    if app_doc and req.rating and req.rating >= 4:
+        cert = {"student_id": app_doc["student_id"], "application_id": app_id, "certificate_type": "internship_completion",
+                "title": f"Certificate of Completion - {app_doc.get('job_title','')}", "description": req.feedback,
+                "issuer_name": app_doc.get("company_name",""), "issue_date": datetime.now(timezone.utc).isoformat(), "status": "issued",
+                "created_at": datetime.now(timezone.utc).isoformat()}
+        cert["blockchain_hash"] = hashlib.sha256(json.dumps(cert, sort_keys=True).encode()).hexdigest()
+        await db.certificates.insert_one(cert)
+        await create_notification(app_doc["student_id"], "Certificate Issued", f"Certificate for {app_doc.get('job_title','')}", "success")
+    return {"message": "Feedback submitted"}
+
+# ─── Recommendations ──────────────────────────────────────────────
+@app.get("/api/recommendations")
+async def get_recommendations(request: Request):
+    user = await require_role("student")(request)
+    cached = await db.recommendations_cache.find_one({"user_id": user["id"]})
+    if cached:
+        age = datetime.now(timezone.utc) - datetime.fromisoformat(cached["generated_at"])
+        if age.total_seconds() < 3600:
+            cached["_id"] = str(cached["_id"]); return {"recommendations": cached.get("recommendations", []), "generated_at": cached["generated_at"]}
+    profile = await db.student_profiles.find_one({"user_id": user["id"]})
+    if not profile: return {"recommendations": [], "message": "Complete your profile first"}
+    jobs = await db.job_postings.find({"status": "active"}).to_list(50)
+    if not jobs: return {"recommendations": [], "message": "No active jobs"}
+    recs = await fallback_recommendations(profile, jobs)
+    await db.recommendations_shown.update_one({"user_id": user["id"]}, {"$inc": {"count": 1}, "$setOnInsert": {"user_id": user["id"]}}, upsert=True)
+    return {"recommendations": recs, "generated_at": datetime.now(timezone.utc).isoformat()}
+
+@app.post("/api/recommendations/generate")
+async def force_generate_recommendations(request: Request):
+    user = await require_role("student")(request)
+    profile = await db.student_profiles.find_one({"user_id": user["id"]})
+    if not profile: raise HTTPException(400, "Complete your profile first")
+    jobs = await db.job_postings.find({"status": "active"}).to_list(50)
+    if not jobs: return {"recommendations": [], "message": "No active jobs"}
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        skills = profile.get("skills", []); bio = profile.get("bio", ""); dept = profile.get("department", "")
+        jobs_data = [{"id": str(j["_id"]), "title": j.get("title",""), "description": j.get("description","")[:300], "required_skills": j.get("required_skills",[]), "job_type": j.get("job_type",""), "company": j.get("company_name",""), "location": j.get("location",""), "stipend_min": j.get("stipend_min"), "stipend_max": j.get("stipend_max")} for j in jobs]
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"rec-{user['id']}", system_message="Return ONLY valid JSON.").with_model("openai", "gpt-5.2")
+        resp = await chat.send_message(UserMessage(text=f"Score 0-100 each job for student. Skills={','.join(skills)}, Dept={dept}, Bio={bio}. Jobs: {json.dumps(jobs_data)}. Return JSON array: [{{\"job_id\":\"...\",\"score\":0-100,\"reason\":\"1 sentence\"}}]"))
+        text = resp.strip()
+        if text.startswith("```"): text = text.split("\n", 1)[1].rsplit("```", 1)[0]
+        scored = json.loads(text)
+        recs = []
+        for s in scored:
+            jd = next((j for j in jobs_data if j["id"] == s.get("job_id")), None)
+            if jd: recs.append({"job_id": s["job_id"], "title": jd["title"], "company": jd["company"], "location": jd["location"], "job_type": jd["job_type"], "stipend_min": jd["stipend_min"], "stipend_max": jd["stipend_max"], "score": s.get("score",0), "reason": s.get("reason",""), "required_skills": jd["required_skills"]})
+        await db.recommendations_cache.update_one({"user_id": user["id"]}, {"$set": {"user_id": user["id"], "recommendations": recs, "generated_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+        return {"recommendations": recs, "generated_at": datetime.now(timezone.utc).isoformat()}
+    except Exception:
+        recs = await fallback_recommendations(profile, jobs)
+        return {"recommendations": recs, "generated_at": datetime.now(timezone.utc).isoformat()}
+
+async def fallback_recommendations(profile, jobs):
+    skills = set(s.lower() for s in profile.get("skills", []))
+    recs = []
+    for j in jobs:
+        req = set(s.lower() for s in j.get("required_skills", []))
+        overlap = skills & req; score = int((len(overlap)/max(len(req),1))*100) if req else 50
+        recs.append({"job_id": str(j["_id"]), "title": j.get("title",""), "company": j.get("company_name",""), "location": j.get("location",""), "job_type": j.get("job_type",""), "stipend_min": j.get("stipend_min"), "stipend_max": j.get("stipend_max"), "score": score, "reason": f"Skill match: {', '.join(overlap)}" if overlap else "Explore new opportunities", "required_skills": j.get("required_skills",[])})
+    recs.sort(key=lambda x: -x["score"]); return recs
+
+# ─── Certificate Routes ───────────────────────────────────────────
+@app.get("/api/certificates")
+async def list_certificates(request: Request):
+    user = await get_current_user(request); query = {}
+    if user["role"] == "student": query["student_id"] = user["id"]
+    certs = await db.certificates.find(query).sort("created_at", -1).to_list(100)
+    for c in certs: c["_id"] = str(c["_id"]); c["id"] = c["_id"]
+    return {"certificates": certs}
+
+@app.get("/api/certificates/verify/{cert_hash}")
+async def verify_certificate(cert_hash: str):
+    cert = await db.certificates.find_one({"blockchain_hash": cert_hash})
+    if not cert: return {"verified": False, "message": "Certificate not found"}
+    cert["_id"] = str(cert["_id"]); cert["id"] = cert["_id"]
+    student = await db.users.find_one({"_id": ObjectId(cert["student_id"])}, {"password_hash": 0})
+    return {"verified": True, "certificate": cert, "student_name": student["name"] if student else "Unknown"}
+
+@app.get("/api/certificates/{cert_id}/pdf")
+async def generate_certificate_pdf(cert_id: str):
+    try: cert = await db.certificates.find_one({"_id": ObjectId(cert_id)})
+    except Exception: raise HTTPException(404, "Not found")
+    if not cert: raise HTTPException(404, "Not found")
+    student = await db.users.find_one({"_id": ObjectId(cert["student_id"])}, {"password_hash": 0})
+    name = student["name"] if student else "Unknown"
+    html = f"<html><body style='font-family:Georgia;text-align:center;padding:60px;border:8px double #002FA7;margin:40px'><h1 style='color:#002FA7'>CERTIFICATE</h1><p>This certifies that</p><h2 style='color:#002FA7;border-bottom:2px solid #002FA7;display:inline-block;padding:10px 40px'>{name}</h2><h3>{cert.get('title','')}</h3><p>Issued by: {cert.get('issuer_name','')}</p><p style='font-family:monospace;font-size:10px;color:#888'>Hash: {cert.get('blockchain_hash','')}</p></body></html>"
+    return Response(content=html, media_type="text/html")
+
+# ─── Analytics ────────────────────────────────────────────────────
+@app.get("/api/analytics/overview")
+async def analytics_overview(request: Request):
+    await require_role("admin", "placement")(request)
+    total_users = await db.users.count_documents({}); total_students = await db.users.count_documents({"role": "student"})
+    total_jobs = await db.job_postings.count_documents({}); active_jobs = await db.job_postings.count_documents({"status": "active"})
+    total_apps = await db.applications.count_documents({}); selected = await db.applications.count_documents({"status": "selected"})
+    rejected = await db.applications.count_documents({"status": "rejected"}); pending = await db.applications.count_documents({"status": "submitted"})
+    return {"total_users": total_users, "total_students": total_students, "total_jobs": total_jobs, "active_jobs": active_jobs,
+            "total_applications": total_apps, "selected": selected, "rejected": rejected, "pending": pending,
+            "placement_rate": round(selected/max(total_apps,1)*100,1),
+            "total_employers": await db.users.count_documents({"role": "employer"}), "total_mentors": await db.users.count_documents({"role": "mentor"}),
+            "total_certificates": await db.certificates.count_documents({})}
+
+@app.get("/api/analytics/placements")
+async def placement_analytics(request: Request):
+    await require_role("admin", "placement")(request)
+    status_agg = await db.applications.aggregate([{"$group": {"_id": "$status", "count": {"$sum": 1}}}]).to_list(20)
+    return {"status_breakdown": {i["_id"]: i["count"] for i in status_agg}}
+
+# ─── Notification Routes ──────────────────────────────────────────
+@app.get("/api/notifications")
+async def list_notifications(request: Request):
+    user = await get_current_user(request)
+    notifs = await db.notifications.find({"user_id": user["id"]}).sort("created_at", -1).limit(50).to_list(50)
+    for n in notifs: n["_id"] = str(n["_id"]); n["id"] = n["_id"]
+    unread = await db.notifications.count_documents({"user_id": user["id"], "read": False})
+    return {"notifications": notifs, "unread_count": unread}
+
+@app.put("/api/notifications/read-all")
+async def mark_all_read(request: Request):
+    user = await get_current_user(request)
+    await db.notifications.update_many({"user_id": user["id"], "read": False}, {"$set": {"read": True}}); return {"message": "All read"}
+
+# ─── Interview Routes ─────────────────────────────────────────────
+@app.post("/api/interviews")
+async def create_interview(req: InterviewCreate, request: Request):
+    user = await require_role("employer", "placement", "admin")(request)
+    app_doc = await db.applications.find_one({"_id": ObjectId(req.application_id)})
+    if not app_doc: raise HTTPException(404, "Application not found")
+    interview = {"application_id": req.application_id, "student_id": app_doc["student_id"], "job_title": app_doc.get("job_title",""),
+                 "interview_type": req.interview_type, "scheduled_date": req.scheduled_date, "duration_minutes": req.duration_minutes,
+                 "location": req.location, "meeting_link": req.meeting_link, "status": "scheduled", "created_by": user["id"], "created_at": datetime.now(timezone.utc).isoformat()}
+    r = await db.interviews.insert_one(interview); interview["_id"] = str(r.inserted_id); interview["id"] = interview["_id"]
+    await db.applications.update_one({"_id": ObjectId(req.application_id)}, {"$set": {"status": "interview_scheduled"}})
+    await create_notification(app_doc["student_id"], "Interview Scheduled", f"Interview for {app_doc.get('job_title','')} on {req.scheduled_date}", "info")
+    return interview
+
+@app.get("/api/interviews")
+async def list_interviews(request: Request):
+    user = await get_current_user(request); query = {}
+    if user["role"] == "student": query["student_id"] = user["id"]
+    elif user["role"] == "employer": query["created_by"] = user["id"]
+    interviews = await db.interviews.find(query).sort("scheduled_date", 1).to_list(100)
+    for i in interviews: i["_id"] = str(i["_id"]); i["id"] = i["_id"]
+    return {"interviews": interviews}
+
+# ─── Mentor Routes ────────────────────────────────────────────────
+@app.get("/api/mentor/students")
+async def mentor_students(request: Request):
+    user = await require_role("mentor")(request)
+    apps = await db.applications.find({"mentor_id": user["id"]}).to_list(1000)
+    student_ids = list(set(a["student_id"] for a in apps)); students = []
+    for sid in student_ids:
+        s_user = await db.users.find_one({"_id": ObjectId(sid)}, {"password_hash": 0})
+        if s_user: s_user["_id"] = str(s_user["_id"]); s_user["id"] = s_user["_id"]; students.append({"user": s_user, "total_applications": sum(1 for a in apps if a["student_id"] == sid)})
+    return {"students": students}
+
+# ─── Skill Gap ────────────────────────────────────────────────────
+@app.get("/api/skill-gap")
+async def skill_gap_analysis(request: Request):
+    user = await require_role("student")(request)
+    profile = await db.student_profiles.find_one({"user_id": user["id"]})
+    if not profile: raise HTTPException(400, "Complete your profile")
+    student_skills = set(s.lower() for s in profile.get("skills", []))
+    jobs = await db.job_postings.find({"status": "active"}).to_list(50)
+    all_req, gaps = {}, {}
+    for j in jobs:
+        for s in j.get("required_skills", []):
+            sk = s.lower(); all_req[sk] = all_req.get(sk, 0) + 1
+            if sk not in student_skills: gaps[sk] = gaps.get(sk, 0) + 1
+    gap_details = [{"skill": s.title(), "demand_count": c, "total_jobs_requiring": all_req.get(s, 0), "learning_resource": f"https://www.google.com/search?q=learn+{s.replace(' ','+')}", "platform": "Google"} for s, c in sorted(gaps.items(), key=lambda x: -x[1])]
+    return {"student_skills": list(student_skills), "total_skills": len(student_skills), "total_gaps": len(gap_details), "gaps": gap_details[:15], "skill_coverage": round(len(student_skills)/max(len(all_req),1)*100, 1)}
+
+# ─── Resume Upload ────────────────────────────────────────────────
+@app.post("/api/upload/resume")
+async def upload_resume(request: Request):
+    user = await require_role("student")(request); body = await request.json()
+    file_data = body.get("file_data", ""); file_name = body.get("file_name", "resume.pdf")
+    if not file_data: raise HTTPException(400, "No file data")
+    await db.uploads.update_one({"user_id": user["id"], "type": "resume"}, {"$set": {"user_id": user["id"], "file_name": file_name, "file_data": file_data, "type": "resume", "uploaded_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+    await db.student_profiles.update_one({"user_id": user["id"]}, {"$set": {"resume_url": f"/api/download/resume/{user['id']}"}})
+    return {"message": "Resume uploaded", "file_name": file_name}
+
+@app.get("/api/download/resume/{user_id}")
+async def download_resume(user_id: str):
+    doc = await db.uploads.find_one({"user_id": user_id, "type": "resume"})
+    if not doc: raise HTTPException(404, "Resume not found")
+    data = base64.b64decode(doc["file_data"].split(",")[-1] if "," in doc["file_data"] else doc["file_data"])
+    return StreamingResponse(io.BytesIO(data), media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename={doc['file_name']}"})
+
+# ─── CSV Export ───────────────────────────────────────────────────
+@app.get("/api/export/applications")
+async def export_applications_csv(request: Request):
+    await require_role("admin", "placement")(request)
+    apps = await db.applications.find({}).to_list(10000)
+    output = io.StringIO(); writer = csv.writer(output)
+    writer.writerow(["ID","Student","Job","Company","Status","Applied"])
+    for a in apps: writer.writerow([str(a["_id"]), a.get("student_name",""), a.get("job_title",""), a.get("company_name",""), a.get("status",""), a.get("applied_at","")])
+    output.seek(0)
+    return StreamingResponse(io.BytesIO(output.getvalue().encode()), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=applications.csv"})
+
+# ─── Behavior Tracking ────────────────────────────────────────────
+@app.post("/api/behavior/track")
+async def track_behavior(request: Request):
+    user = await get_current_user(request); body = await request.json()
+    await db.behavior_events.insert_one({"user_id": user["id"], "event_type": body.get("event_type","page_view"), "target": body.get("target",""), "metadata": body.get("metadata",{}), "created_at": datetime.now(timezone.utc).isoformat()})
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    mom = await db.user_momentum.find_one({"user_id": user["id"]})
+    if mom:
+        if mom.get("last_active") != today:
+            yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+            streak = (mom.get("current_streak",0)+1) if mom.get("last_active") == yesterday else 1
+            await db.user_momentum.update_one({"user_id": user["id"]}, {"$set": {"current_streak": streak, "longest_streak": max(mom.get("longest_streak",0), streak), "last_active": today, "total_actions": mom.get("total_actions",0)+1}})
+    else:
+        await db.user_momentum.insert_one({"user_id": user["id"], "current_streak": 1, "longest_streak": 1, "total_actions": 1, "last_active": today, "created_at": datetime.now(timezone.utc).isoformat()})
+    return {"tracked": True}
+
+# ─── Momentum ─────────────────────────────────────────────────────
+@app.get("/api/momentum")
+async def get_momentum(request: Request):
+    user = await get_current_user(request); mom = await db.user_momentum.find_one({"user_id": user["id"]})
+    apps = await db.applications.count_documents({"student_id": user["id"]})
+    selected = await db.applications.count_documents({"student_id": user["id"], "status": "selected"})
+    certs = await db.certificates.count_documents({"student_id": user["id"]})
+    xp = apps * 10 + selected * 50 + certs * 30 + (mom.get("current_streak",0) if mom else 0) * 5
+    level = max(1, xp // 100 + 1); xp_to_next = (level * 100) - xp
+    milestones = []
+    if apps >= 1: milestones.append({"id": "first_app", "title": "First Application", "achieved": True, "icon": "rocket"})
+    if apps >= 5: milestones.append({"id": "five_apps", "title": "5 Applications", "achieved": True, "icon": "fire"})
+    if selected >= 1: milestones.append({"id": "first_select", "title": "First Selection", "achieved": True, "icon": "trophy"})
+    weekly = [0]*7
+    for i in range(7):
+        d = (datetime.now(timezone.utc) - timedelta(days=6-i)).strftime("%Y-%m-%d")
+        weekly[i] = await db.behavior_events.count_documents({"user_id": user["id"], "created_at": {"$regex": f"^{d}"}})
+    return {"current_streak": mom.get("current_streak",0) if mom else 0, "longest_streak": mom.get("longest_streak",0) if mom else 0,
+            "total_actions": mom.get("total_actions",0) if mom else 0, "milestones": milestones, "weekly_activity": weekly,
+            "level": level, "xp": xp, "xp_to_next": xp_to_next, "total_applications": apps, "total_selections": selected, "total_certificates": certs}
+
+# ─── Activity Stream ──────────────────────────────────────────────
+@app.get("/api/activity-stream")
+async def activity_stream(request: Request):
+    user = await get_current_user(request)
+    apps = await db.applications.find({"student_id": user["id"]}).sort("applied_at", -1).limit(10).to_list(10)
+    activities = [{"type": "application", "action": f"Applied to {a.get('job_title','')} at {a.get('company_name','')}", "status": a.get("status","submitted"), "timestamp": a.get("applied_at",""), "meta": {"job_id": a.get("job_id","")}} for a in apps]
+    return {"activities": activities}
+
+# ─── Leaderboard ──────────────────────────────────────────────────
+@app.get("/api/leaderboard")
+async def get_leaderboard(request: Request, category: str = "xp"):
+    user = await get_current_user(request)
+    students = await db.users.find({"role": "student", "is_active": True}).to_list(500)
+    rankings = []
+    for s in students:
+        sid = str(s["_id"]); profile = await db.student_profiles.find_one({"user_id": sid}) or {}
+        apps_c = await db.applications.count_documents({"student_id": sid})
+        sel_c = await db.applications.count_documents({"student_id": sid, "status": "selected"})
+        cert_c = await db.certificates.count_documents({"student_id": sid})
+        mom = await db.user_momentum.find_one({"user_id": sid}) or {}
+        skills = profile.get("skills", []); xp = apps_c * 10 + sel_c * 50 + cert_c * 30
+        rankings.append({"user_id": sid, "name": s.get("name",""), "department": profile.get("department",""), "xp": xp, "level": max(1, xp//100+1),
+                         "applications": apps_c, "selections": sel_c, "certificates": cert_c, "skills_count": len(skills),
+                         "streak": mom.get("current_streak",0), "longest_streak": mom.get("longest_streak",0), "profile_strength": 0,
+                         "days_to_placement": None, "is_you": sid == user["id"], "rank": 0})
+    sort_key = {"xp": "xp", "applications": "applications", "selections": "selections", "streak": "streak", "profile": "skills_count"}.get(category, "xp")
+    rankings.sort(key=lambda x: -x[sort_key])
+    for i, r in enumerate(rankings): r["rank"] = i + 1
+    your_rank = next((r for r in rankings if r["is_you"]), None)
+    return {"rankings": rankings[:20], "your_rank": your_rank, "total_students": len(rankings), "departments": [], "fastest_to_placement": [], "category": category}
+
+# ─── Chatbot ──────────────────────────────────────────────────────
+@app.post("/api/chatbot")
+async def chatbot(request: Request):
+    user = await get_current_user(request); body = await request.json(); message = body.get("message", "")
+    if not message: raise HTTPException(400, "Message required")
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"chat-{user['id']}", system_message=f"You are UNIFY Career Assistant. User: {user['name']} ({user['role']})").with_model("openai", "gpt-5.2")
+        response = await chat.send_message(UserMessage(text=message))
+        return {"response": response}
+    except Exception as e:
+        return {"response": f"I'm having trouble right now. ({str(e)[:80]})"}
+
+# ═══════════════════════════════════════════════════════════════════
+# INTELLIGENCE LAYER: Self-Learning + Decision Engine + Probability
+# ═══════════════════════════════════════════════════════════════════
+
+DEFAULT_WEIGHTS = {"skills": 0.35, "experience": 0.15, "competition": 0.20, "profile": 0.15, "timing": 0.15}
+LEARNING_RATE = 0.02
+
+async def _get_model_weights():
+    doc = await db.model_weights.find_one({"_id": "global"})
+    if doc: return {k: doc[k] for k in DEFAULT_WEIGHTS if k in doc}
+    await db.model_weights.insert_one({"_id": "global", **DEFAULT_WEIGHTS, "version": 1, "outcomes_processed": 0, "updated_at": datetime.now(timezone.utc).isoformat()})
+    return dict(DEFAULT_WEIGHTS)
+
+async def _adapt_weights(outcome, factors):
+    weights = await _get_model_weights()
+    doc = await db.model_weights.find_one({"_id": "global"}) or {}
+    total_outcomes = doc.get("outcomes_processed", 0) + 1
+    lr = max(0.005, LEARNING_RATE / (1 + total_outcomes / 500))
+    if outcome == "hired":
+        for k in weights:
+            if factors.get(k, 0) > 0.5: weights[k] += lr
+    elif outcome == "rejected":
+        for k in weights:
+            if factors.get(k, 0) > 0.5: weights[k] -= lr * 0.5
+    total = sum(weights.values())
+    if total > 0: weights = {k: round(v/total, 4) for k, v in weights.items()}
+    await db.model_weights.update_one({"_id": "global"}, {"$set": {**weights, "outcomes_processed": total_outcomes, "version": total_outcomes, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return weights
+
+def _skill_overlap(ss, js):
+    if not js: return 0.5
+    return len(ss & js) / len(js)
+
+async def _compute_hire_probability(profile, job, apps_count, job_apps):
+    ss = set(s.lower() for s in (profile.get("skills") or [])); js = set(s.lower() for s in (job.get("required_skills") or []))
+    skill_score = _skill_overlap(ss, js); exp_score = min(1.0, apps_count/10)
+    comp_score = max(0.1, 1.0 - min(1.0, job_apps/20))
+    fields = ["bio","department","cgpa","phone","linkedin_url"]; prof_score = sum(1 for f in fields if profile.get(f))/len(fields)
+    try: days_old = (datetime.now(timezone.utc) - datetime.fromisoformat(job.get("created_at",""))).days
+    except: days_old = 30
+    timing_score = max(0.1, 1.0 - days_old/60)
+    w = await _get_model_weights()
+    prob = round(skill_score*w.get("skills",0.35) + exp_score*w.get("experience",0.15) + comp_score*w.get("competition",0.2) + prof_score*w.get("profile",0.15) + timing_score*w.get("timing",0.15), 2)
+    prob = min(0.95, max(0.05, prob))
+    improvements = []
+    if skill_score < 0.5:
+        missing = list(js - ss)[:3]; improvements.append(f"Add skills: {', '.join(s.title() for s in missing)}")
+    if prof_score < 0.6: improvements.append("Complete your profile (bio, LinkedIn, phone)")
+    if timing_score < 0.5: improvements.append("Apply within 24h of posting")
+    if exp_score < 0.3: improvements.append("Apply more to build experience signal")
+    mdoc = await db.model_weights.find_one({"_id": "global"}) or {}
+    return {"probability": prob, "factors": {"skills": round(skill_score,2), "experience": round(exp_score,2), "competition": round(comp_score,2), "profile": round(prof_score,2), "timing": round(timing_score,2)}, "improvement": improvements[:4], "model_version": mdoc.get("version",0)}
+
+@app.post("/api/hiring-probability")
+async def hiring_probability(request: Request):
+    user = await require_role("student")(request); body = await request.json(); job_id = body.get("job_id","")
+    if not job_id: raise HTTPException(400, "job_id required")
+    try: job = await db.job_postings.find_one({"_id": ObjectId(job_id)})
+    except: raise HTTPException(404, "Job not found")
+    if not job: raise HTTPException(404, "Job not found")
+    profile = await db.student_profiles.find_one({"user_id": user["id"]}) or {}
+    result = await _compute_hire_probability(profile, job, await db.applications.count_documents({"student_id": user["id"]}), await db.applications.count_documents({"job_id": job_id}))
+    result["job_id"] = job_id; result["job_title"] = job.get("title",""); result["company"] = job.get("company_name","")
+    await db.probability_predictions.update_one({"user_id": user["id"], "job_id": job_id}, {"$set": {"user_id": user["id"], "job_id": job_id, "probability": result["probability"], "factors": result["factors"], "predicted_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+    return result
+
+@app.get("/api/next-action")
+async def next_action(request: Request):
+    user = await get_current_user(request)
+    if user["role"] == "employer":
+        emp = await db.employer_profiles.find_one({"user_id": user["id"]}); emp_jobs = []
+        if emp: emp_jobs = await db.job_postings.find({"employer_id": str(emp["_id"])}).to_list(100)
+        if not emp_jobs: return {"next_action": "Post your first job listing", "reason": "No active jobs", "impact": "Start receiving applications", "urgency": "HIGH", "action_url": "/dashboard/employer?tab=jobs"}
+        pending = sum([await db.applications.count_documents({"job_id": str(j["_id"]), "status": "submitted"}) for j in emp_jobs])
+        if pending: return {"next_action": f"Review {pending} pending applications", "reason": "Candidates waiting", "impact": "Fast response improves hire quality ~30%", "urgency": "HIGH", "action_url": "/dashboard/employer?tab=applicants"}
+        return {"next_action": "Check candidate rankings", "reason": "AI has ranked matches", "impact": "Find ideal candidates faster", "urgency": "MEDIUM", "action_url": "/dashboard/employer?tab=candidates"}
+    if user["role"] != "student": return {"next_action": "Check your dashboard", "reason": "Review tasks", "impact": "Stay active", "urgency": "MEDIUM", "action_url": f"/dashboard/{user['role']}"}
+    profile = await db.student_profiles.find_one({"user_id": user["id"]}) or {}
+    ss = set(s.lower() for s in (profile.get("skills") or []))
+    apps = await db.applications.find({"student_id": user["id"]}).to_list(100)
+    fields = ["bio","department","cgpa","skills","phone"]; filled = sum(1 for f in fields if profile.get(f))
+    if filled < 3: return {"next_action": "Complete your profile", "reason": f"Only {filled}/{len(fields)} fields filled", "impact": "+40% visibility to employers", "urgency": "HIGH", "action_url": "/dashboard/student?tab=profile"}
+    if not ss: return {"next_action": "Add skills to your profile", "reason": "Skills needed for AI matching", "impact": "Unlock personalized recommendations", "urgency": "HIGH", "action_url": "/dashboard/student?tab=profile"}
+    active_jobs = await db.job_postings.find({"status": "active"}).to_list(50)
+    applied_ids = set(a["job_id"] for a in apps)
+    unapplied = [j for j in active_jobs if str(j["_id"]) not in applied_ids]
+    if unapplied:
+        best_job, best_score = None, -1
+        for j in unapplied:
+            js = set(s.lower() for s in (j.get("required_skills") or [])); score = _skill_overlap(ss, js)
+            ja = await db.applications.count_documents({"job_id": str(j["_id"])}); adj = score * max(0.3, 1-ja/15)
+            if adj > best_score: best_score = adj; best_job = j
+        if best_job:
+            prob = await _compute_hire_probability(profile, best_job, len(apps), await db.applications.count_documents({"job_id": str(best_job["_id"])}))
+            return {"next_action": f"Apply to {best_job['title']} at {best_job.get('company_name','')}", "reason": "Highest match + lowest competition", "impact": f"+{int(prob['probability']*100)}% hire probability", "urgency": "HIGH" if prob["probability"] > 0.4 else "MEDIUM", "job_id": str(best_job["_id"]), "probability": prob["probability"], "action_url": "/dashboard/student?tab=jobs"}
+    return {"next_action": "Analyze skill gaps", "reason": "Applied to all available jobs", "impact": "Expand your match pool", "urgency": "MEDIUM", "action_url": "/dashboard/student?tab=skills"}
+
+@app.get("/api/control")
+async def control_system(request: Request):
+    user = await require_role("student")(request); profile = await db.student_profiles.find_one({"user_id": user["id"]}) or {}
+    apps = await db.applications.find({"student_id": user["id"]}).to_list(100)
+    selected = sum(1 for a in apps if a.get("status") == "selected"); rejected = sum(1 for a in apps if a.get("status") == "rejected")
+    active_jobs = await db.job_postings.count_documents({"status": "active"}); applied_ids = set(a["job_id"] for a in apps)
+    unapplied = max(0, active_jobs - len(applied_ids))
+    ss = set(s.lower() for s in (profile.get("skills") or [])); fields = ["bio","department","cgpa","skills","phone","linkedin_url"]
+    pf = sum(1 for f in fields if profile.get(f)); pp = int((pf/len(fields))*100)
+    momentum = min(100, int(len(apps)*8 + selected*20 + len(ss)*3 + pp*0.3))
+    if selected > 0: risk, action, deadline = "LOW", "You're placed! Complete remaining interviews", "No deadline"
+    elif len(apps) == 0: risk, action, deadline = "CRITICAL", f"Apply to {min(5,unapplied)} jobs today", "Immediately"
+    elif rejected > len(apps)*0.7 and len(apps) > 3: risk, action, deadline = "HIGH", "Improve profile/skills before applying more", "24 hours"
+    elif unapplied > 0 and len(apps) < 5: risk, action, deadline = "HIGH", f"Apply to {min(7,unapplied)} jobs today", "24 hours"
+    elif unapplied > 0: risk, action, deadline = "MEDIUM", f"Apply to {min(3,unapplied)} more positions", "48 hours"
+    else: risk, action, deadline = "LOW", "Follow up on pending applications", "This week"
+    wt = max(3, min(10, unapplied)); wd = sum(1 for a in apps if a.get("applied_at","") >= (datetime.now(timezone.utc)-timedelta(days=7)).isoformat())
+    return {"risk": risk, "momentum": momentum, "action_required": action, "deadline": deadline,
+            "stats": {"total_applications": len(apps), "selected": selected, "rejected": rejected, "unapplied_jobs": unapplied, "profile_completeness": pp, "skills_count": len(ss)},
+            "weekly": {"target": wt, "done": wd, "remaining": max(0, wt-wd)}}
+
+@app.get("/api/employer/best-candidates")
+async def employer_best_candidates(request: Request, job_id: Optional[str] = None):
+    user = await require_role("employer", "placement", "admin")(request)
+    emp = await db.employer_profiles.find_one({"user_id": user["id"]}); emp_jobs = []
+    if emp: emp_jobs = await db.job_postings.find({"employer_id": str(emp["_id"])}).to_list(100)
+    elif user["role"] in ["placement","admin"]: emp_jobs = await db.job_postings.find({"status": "active"}).to_list(100)
+    if job_id:
+        emp_jobs = [j for j in emp_jobs if str(j["_id"]) == job_id]
+        if not emp_jobs:
+            try:
+                j = await db.job_postings.find_one({"_id": ObjectId(job_id)})
+                if j: emp_jobs = [j]
+            except: pass
+    candidates, seen = [], set()
+    for job in emp_jobs:
+        jid = str(job["_id"]); apps_for = await db.applications.find({"job_id": jid}).to_list(100)
+        for ad in apps_for:
+            sid = ad["student_id"]
+            if sid in seen: continue
+            seen.add(sid); prof = await db.student_profiles.find_one({"user_id": sid}) or {}
+            su = await db.users.find_one({"_id": ObjectId(sid)}, {"password_hash": 0})
+            if not su: continue
+            prob = await _compute_hire_probability(prof, job, await db.applications.count_documents({"student_id": sid}), len(apps_for))
+            reasons = []
+            if prob["factors"]["skills"] >= 0.7: reasons.append("Exact skill match")
+            if prob["factors"]["profile"] >= 0.6: reasons.append("Complete profile")
+            if not reasons: reasons.append("Potential fit")
+            candidates.append({"user_id": sid, "name": su.get("name",""), "email": su.get("email",""), "department": prof.get("department",""),
+                               "skills": prof.get("skills",[]), "hire_probability": prob["probability"], "factors": prob["factors"],
+                               "reason": " + ".join(reasons), "application_id": str(ad["_id"]), "job_id": jid, "job_title": job.get("title",""), "status": ad.get("status","submitted")})
+    candidates.sort(key=lambda x: -x["hire_probability"])
+    return {"candidates": candidates[:30], "total": len(candidates)}
+
+@app.get("/api/model/weights")
+async def get_model_weights_endpoint(request: Request):
+    await get_current_user(request); w = await _get_model_weights(); doc = await db.model_weights.find_one({"_id": "global"}) or {}
+    return {"weights": w, "version": doc.get("version",0), "outcomes_processed": doc.get("outcomes_processed",0), "updated_at": doc.get("updated_at",""), "default_weights": DEFAULT_WEIGHTS}
+
+@app.get("/api/user-behavior")
+async def user_behavior_analysis(request: Request):
+    user = await get_current_user(request); uid = user["id"]
+    events = await db.behavior_events.find({"user_id": uid}).sort("created_at", -1).limit(200).to_list(200)
+    pv = [e for e in events if e.get("event_type") == "page_view"]
+    actions = [e for e in events if e.get("event_type") in ("apply","profile_update","resume_upload")]
+    rs = await db.recommendations_shown.count_documents({"user_id": uid})
+    rf = await db.recommendations_followed.count_documents({"user_id": uid})
+    ob = round(rf / max(rs, 1), 2)
+    fp, fix = None, None
+    pvp = sum(1 for e in pv if "profile" in (e.get("target") or ""))
+    pu = await db.behavior_events.count_documents({"user_id": uid, "event_type": "profile_update"})
+    if pvp > 3 and pu == 0: fp, fix = "profile_editing", "Simplify profile form or auto-fill"
+    elif len(events) > 10 and len(actions) == 0: fp, fix = "no_actions", "Show prominent one-click apply buttons"
+    apps = await db.applications.count_documents({"student_id": uid})
+    jv = sum(1 for e in pv if "jobs" in (e.get("target") or ""))
+    dr = round(1 - apps/max(jv,1), 2) if jv > 0 else None
+    return {"obedience_score": ob, "friction_point": fp, "fix": fix, "total_events": len(events), "page_views": len(pv), "actions_taken": len(actions), "avg_time_to_action_seconds": None, "drop_off_rate": dr, "recommendations_shown": rs, "recommendations_followed": rf}
+
+@app.get("/api/alerts")
+async def predictive_alerts(request: Request):
+    user = await require_role("student")(request)
+    profile = await db.student_profiles.find_one({"user_id": user["id"]}) or {}
+    ss = set(s.lower() for s in (profile.get("skills") or []))
+    if not ss: return {"alerts": [], "message": "Add skills to get alerts"}
+    applied = set(); apps = await db.applications.find({"student_id": user["id"]}, {"job_id": 1}).to_list(1000)
+    for a in apps: applied.add(a["job_id"])
+    jobs = await db.job_postings.find({"status": "active"}).to_list(50); ac = len(apps); alerts = []
+    for j in jobs:
+        jid = str(j["_id"])
+        if jid in applied: continue
+        ja = await db.applications.count_documents({"job_id": jid})
+        prob = await _compute_hire_probability(profile, j, ac, ja)
+        if prob["probability"] >= 0.35:
+            dl = j.get("application_deadline",""); hl = None
+            if dl:
+                try: hl = max(0, (datetime.fromisoformat(dl) - datetime.now(timezone.utc)).total_seconds()/3600)
+                except: pass
+            urg = "CRITICAL" if (hl and hl < 24) else ("HIGH" if prob["probability"] >= 0.5 else "MEDIUM")
+            alerts.append({"job_id": jid, "title": j.get("title",""), "company": j.get("company_name",""), "probability": prob["probability"], "urgency": urg, "message": f"Apply now — {int(prob['probability']*100)}% hire probability", "hours_until_deadline": round(hl,1) if hl else None})
+    alerts.sort(key=lambda x: (-x["probability"], x.get("hours_until_deadline") or 9999))
+    return {"alerts": alerts[:10]}
+
+@app.get("/api/system-health")
+async def system_health(request: Request):
+    await require_role("admin", "placement")(request)
+    ta = await db.applications.count_documents({}); ts = await db.applications.count_documents({"status": "selected"})
+    tr = await db.applications.count_documents({"status": "rejected"})
+    wk = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    ra = await db.applications.count_documents({"applied_at": {"$gte": wk}})
+    tst = await db.users.count_documents({"role": "student"})
+    issues = []
+    if ta > 10 and ts/max(ta,1) < 0.1: issues.append({"issue": "Low conversion rate", "action": "Adjust matching weights"})
+    wdoc = await db.model_weights.find_one({"_id": "global"}) or {}
+    return {"status": "healthy" if not issues else "needs_attention", "issues": issues,
+            "metrics": {"total_users": await db.users.count_documents({}), "total_students": tst, "total_applications": ta, "total_selected": ts, "total_rejected": tr, "conversion_rate": round(ts/max(ta,1),3), "weekly_applications": ra},
+            "model": {"version": wdoc.get("version",0), "outcomes_processed": wdoc.get("outcomes_processed",0), "weights": await _get_model_weights(), "learning_rate": max(0.005, LEARNING_RATE/(1+wdoc.get("outcomes_processed",0)/500))}}
+
+# ─── Seed Demo Jobs ───────────────────────────────────────────────
+@app.post("/api/seed/demo")
+async def seed_demo_data(request: Request):
+    await require_role("admin")(request)
+    if await db.job_postings.count_documents({}) > 0: return {"message": "Demo data exists"}
+    emp = await db.users.find_one({"email": "employer@unify.com"})
+    if not emp: return {"message": "No employer account"}
+    eid = str(emp["_id"]); ep = await db.employer_profiles.find_one({"user_id": eid})
+    epid = str(ep["_id"]) if ep else eid
+    jobs = [
+        {"title": "Full Stack Developer Intern", "description": "Build web apps with React/Node.", "job_type": "internship", "location": "Bangalore", "is_remote": False, "stipend_min": 15000, "stipend_max": 25000, "duration_months": 6, "required_skills": ["React","Node.js","MongoDB","JavaScript","Git"], "status": "active"},
+        {"title": "ML Research Intern", "description": "Work on ML models for NLP.", "job_type": "internship", "location": "Remote", "is_remote": True, "stipend_min": 20000, "stipend_max": 35000, "duration_months": 3, "required_skills": ["Python","TensorFlow","PyTorch","Machine Learning","NLP"], "status": "active"},
+        {"title": "Data Analyst Trainee", "description": "Analyze business data.", "job_type": "training", "location": "Mumbai", "is_remote": False, "stipend_min": 12000, "stipend_max": 18000, "duration_months": 4, "required_skills": ["SQL","Python","Excel","Tableau","Statistics"], "status": "active"},
+        {"title": "DevOps Engineer Intern", "description": "CI/CD and cloud infrastructure.", "job_type": "internship", "location": "Hyderabad", "is_remote": False, "stipend_min": 18000, "stipend_max": 28000, "duration_months": 6, "required_skills": ["Docker","Kubernetes","AWS","Linux","Git"], "status": "active"},
+        {"title": "UI/UX Design Intern", "description": "Design interfaces for web/mobile.", "job_type": "internship", "location": "Remote", "is_remote": True, "stipend_min": 10000, "stipend_max": 20000, "duration_months": 3, "required_skills": ["Figma","UI Design","UX Research","Prototyping","CSS"], "status": "active"},
+        {"title": "Backend Developer", "description": "Full-time backend with microservices.", "job_type": "placement", "location": "Pune", "is_remote": False, "stipend_min": 40000, "stipend_max": 60000, "duration_months": 12, "required_skills": ["Python","FastAPI","PostgreSQL","Docker","Redis"], "status": "active"},
+    ]
+    now = datetime.now(timezone.utc).isoformat()
+    for j in jobs:
+        j["employer_id"] = epid; j["employer_user_id"] = eid; j["company_name"] = "TechCorp Solutions"
+        j["application_deadline"] = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(); j["created_at"] = now; j["updated_at"] = now
+        await db.job_postings.insert_one(j)
+    return {"message": f"Seeded {len(jobs)} jobs"}
+
+# ─── WebSocket ────────────────────────────────────────────────────
+@app.websocket("/api/ws/{user_id}")
+async def websocket_endpoint(ws: WebSocket, user_id: str):
+    await ws_manager.connect(ws, user_id)
+    try:
+        while True:
+            data = await ws.receive_text()
+            if data == "ping": await ws.send_json({"type": "pong"})
+    except WebSocketDisconnect:
+        ws_manager.disconnect(ws, user_id)

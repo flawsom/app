@@ -1,0 +1,255 @@
+{
+  "test_run_timestamp": "2026-04-14T15:00:40.034487",
+  "total_tests": 30,
+  "passed_tests": 26,
+  "success_rate": "86.7%",
+  "results": [
+    {
+      "test": "Health Check",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:01.182187"
+    },
+    {
+      "test": "Login - Student",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:02.556905"
+    },
+    {
+      "test": "Login - Admin",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:03.770622"
+    },
+    {
+      "test": "Login - Employer",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:05.499141"
+    },
+    {
+      "test": "Login - Mentor",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:08.312520"
+    },
+    {
+      "test": "Login - Placement",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:09.860238"
+    },
+    {
+      "test": "Next Action - Student",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:10.707985"
+    },
+    {
+      "test": "Control System - Student",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:11.780899"
+    },
+    {
+      "test": "Model Weights - Student",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:12.732198"
+    },
+    {
+      "test": "User Behavior - Student",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:14.822412"
+    },
+    {
+      "test": "Alerts - Student",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:15.737837"
+    },
+    {
+      "test": "Next Action - Admin",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:16.621253"
+    },
+    {
+      "test": "Model Weights - Admin",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:17.829638"
+    },
+    {
+      "test": "User Behavior - Admin",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:19.783175"
+    },
+    {
+      "test": "Alerts - Admin",
+      "success": false,
+      "details": "API Error: Insufficient permissions",
+      "expected_status": 200,
+      "actual_status": 403,
+      "timestamp": "2026-04-14T15:00:20.783836"
+    },
+    {
+      "test": "Next Action - Employer",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:22.033607"
+    },
+    {
+      "test": "Model Weights - Employer",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:23.064268"
+    },
+    {
+      "test": "User Behavior - Employer",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:24.278596"
+    },
+    {
+      "test": "Alerts - Employer",
+      "success": false,
+      "details": "API Error: Insufficient permissions",
+      "expected_status": 200,
+      "actual_status": 403,
+      "timestamp": "2026-04-14T15:00:25.208969"
+    },
+    {
+      "test": "Next Action - Mentor",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:26.910788"
+    },
+    {
+      "test": "Model Weights - Mentor",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:28.533597"
+    },
+    {
+      "test": "User Behavior - Mentor",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:29.561451"
+    },
+    {
+      "test": "Alerts - Mentor",
+      "success": false,
+      "details": "API Error: Insufficient permissions",
+      "expected_status": 200,
+      "actual_status": 403,
+      "timestamp": "2026-04-14T15:00:30.543873"
+    },
+    {
+      "test": "Next Action - Placement",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:32.570716"
+    },
+    {
+      "test": "Model Weights - Placement",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:33.481503"
+    },
+    {
+      "test": "User Behavior - Placement",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:34.530586"
+    },
+    {
+      "test": "Alerts - Placement",
+      "success": false,
+      "details": "API Error: Insufficient permissions",
+      "expected_status": 200,
+      "actual_status": 403,
+      "timestamp": "2026-04-14T15:00:36.543646"
+    },
+    {
+      "test": "System Health (Admin)",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:37.712710"
+    },
+    {
+      "test": "Get Jobs for Probability Test",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:38.781094"
+    },
+    {
+      "test": "Hiring Probability (Real Job)",
+      "success": true,
+      "details": "",
+      "expected_status": null,
+      "actual_status": null,
+      "timestamp": "2026-04-14T15:00:40.031981"
+    }
+  ],
+  "user_tokens_tested": [
+    "Student",
+    "Admin",
+    "Employer",
+    "Mentor",
+    "Placement"
+  ]
+}
