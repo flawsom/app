@@ -1,16 +1,13 @@
-const path = require('path');
-
-/** @type {import('next').NextConfig} */
 const nextConfig = {
-  typescript: {
-    ignoreBuildErrors: true,
+  output: 'standalone',
+  images: {
+    unoptimized: true,
   },
   eslint: {
     ignoreDuringBuilds: true,
   },
-  webpack: (config) => {
-    config.resolve.alias['@'] = path.resolve(__dirname, 'src');
-    return config;
+  typescript: {
+    ignoreBuildErrors: true,
   },
 }
 

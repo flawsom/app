@@ -531,15 +531,7 @@ async def verify_certificate(cert_hash: str):
     student = await db.users.find_one({"_id": ObjectId(cert["student_id"])}, {"password_hash": 0})
     return {"verified": True, "certificate": cert, "student_name": student["name"] if student else "Unknown"}
 
-@app.get("/api/certificates/{cert_id}/pdf")
-async def generate_certificate_pdf(cert_id: str):
-    try: cert = await db.certificates.find_one({"_id": ObjectId(cert_id)})
-    except Exception: raise HTTPException(404, "Not found")
-    if not cert: raise HTTPException(404, "Not found")
-    student = await db.users.find_one({"_id": ObjectId(cert["student_id"])}, {"password_hash": 0})
-    name = student["name"] if student else "Unknown"
-    html = f"<html><body style='font-family:Georgia;text-align:center;padding:60px;border:8px double #002FA7;margin:40px'><h1 style='color:#002FA7'>CERTIFICATE</h1><p>This certifies that</p><h2 style='color:#002FA7;border-bottom:2px solid #002FA7;display:inline-block;padding:10px 40px'>{name}</h2><h3>{cert.get('title','')}</h3><p>Issued by: {cert.get('issuer_name','')}</p><p style='font-family:monospace;font-size:10px;color:#888'>Hash: {cert.get('blockchain_hash','')}</p></body></html>"
-    return Response(content=html, media_type="text/html")
+# Certificate PDF handled by WeasyPrint version below
 
 # ─── Analytics ────────────────────────────────────────────────────
 @app.get("/api/analytics/overview")
@@ -553,7 +545,9 @@ async def analytics_overview(request: Request):
             "total_applications": total_apps, "selected": selected, "rejected": rejected, "pending": pending,
             "placement_rate": round(selected/max(total_apps,1)*100,1),
             "total_employers": await db.users.count_documents({"role": "employer"}), "total_mentors": await db.users.count_documents({"role": "mentor"}),
-            "total_certificates": await db.certificates.count_documents({})}
+            "total_certificates": await db.certificates.count_documents({}),
+            "applications_by_status": [{"status": s, "count": await db.applications.count_documents({"status": s})} for s in ["submitted","under_review","shortlisted","interview_scheduled","selected","rejected"]],
+            "conversion_rate": round(selected/max(total_apps,1), 3)}
 
 @app.get("/api/analytics/placements")
 async def placement_analytics(request: Request):
@@ -979,6 +973,261 @@ async def seed_demo_data(request: Request):
         j["application_deadline"] = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(); j["created_at"] = now; j["updated_at"] = now
         await db.job_postings.insert_one(j)
     return {"message": f"Seeded {len(jobs)} jobs"}
+
+# ═══════════════════════════════════════════════════════════════════
+# INTERVIEW PREP AI
+# ═══════════════════════════════════════════════════════════════════
+@app.post("/api/interview-prep")
+async def interview_prep(request: Request):
+    """Generate interview questions and prep material for a specific job."""
+    user = await get_current_user(request); body = await request.json()
+    job_id = body.get("job_id", ""); job = None
+    if job_id:
+        try: job = await db.job_postings.find_one({"_id": ObjectId(job_id)})
+        except: pass
+    profile = await db.student_profiles.find_one({"user_id": user["id"]}) or {}
+    skills = profile.get("skills", []); dept = profile.get("department", "")
+    job_title = job.get("title", "Software Engineer") if job else body.get("job_title", "Software Engineer")
+    company = job.get("company_name", "the company") if job else body.get("company", "the company")
+    req_skills = job.get("required_skills", []) if job else []
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"prep-{user['id']}-{job_id}", system_message="You are a senior career coach. Return ONLY valid JSON.").with_model("openai", "gpt-4o")
+        prompt = f"""Generate interview prep for: {job_title} at {company}.
+Required skills: {', '.join(req_skills)}. Student skills: {', '.join(skills)}. Dept: {dept}.
+Return JSON: {{"questions": [{{"question": "...", "category": "technical|behavioral|situational", "difficulty": "easy|medium|hard", "tip": "1-sentence answer strategy"}}], "company_brief": "2-sentence company research note", "star_examples": ["1 STAR example they could prepare"], "do_list": ["things to do before interview"], "dont_list": ["things to avoid"]}}
+Generate 8 questions (4 technical, 2 behavioral, 2 situational)."""
+        resp = await chat.send_message(UserMessage(text=prompt))
+        text = resp.strip()
+        if text.startswith("```"): text = text.split("\n", 1)[1].rsplit("```", 1)[0]
+        data = json.loads(text); data["job_title"] = job_title; data["company"] = company
+        return data
+    except Exception as e:
+        # Fallback: generate basic questions
+        questions = [
+            {"question": f"Explain your experience with {req_skills[0] if req_skills else 'your primary skill'}.", "category": "technical", "difficulty": "medium", "tip": "Use specific project examples with measurable outcomes"},
+            {"question": "Tell me about a time you faced a challenging deadline.", "category": "behavioral", "difficulty": "medium", "tip": "Use STAR framework: Situation, Task, Action, Result"},
+            {"question": f"How would you approach building a feature for {company}?", "category": "situational", "difficulty": "hard", "tip": "Think aloud, ask clarifying questions, break into steps"},
+            {"question": "What's your biggest technical weakness and how are you addressing it?", "category": "behavioral", "difficulty": "easy", "tip": "Be honest but show growth mindset"},
+        ]
+        for s in req_skills[:3]:
+            questions.append({"question": f"Explain the core concepts of {s} and when you'd use it.", "category": "technical", "difficulty": "medium", "tip": f"Relate {s} to a real project you've worked on"})
+        return {"questions": questions[:8], "company_brief": f"Research {company}'s recent projects and tech stack.", "star_examples": ["Prepare 2-3 STAR stories from your projects"], "do_list": ["Research the company", "Practice coding problems", "Prepare questions to ask"], "dont_list": ["Don't badmouth previous experiences", "Don't say 'I don't know' without trying"], "job_title": job_title, "company": company}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# COVER LETTER GENERATOR
+# ═══════════════════════════════════════════════════════════════════
+@app.post("/api/cover-letter")
+async def generate_cover_letter(request: Request):
+    """Generate a tailored cover letter for a specific job."""
+    user = await get_current_user(request); body = await request.json(); job_id = body.get("job_id", "")
+    if not job_id: raise HTTPException(400, "job_id required")
+    try: job = await db.job_postings.find_one({"_id": ObjectId(job_id)})
+    except: raise HTTPException(404, "Job not found")
+    if not job: raise HTTPException(404, "Job not found")
+    profile = await db.student_profiles.find_one({"user_id": user["id"]}) or {}
+    skills = profile.get("skills", []); bio = profile.get("bio", ""); dept = profile.get("department", "")
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"cl-{user['id']}-{job_id}", system_message="You are an expert career advisor. Write concise, impactful cover letters.").with_model("openai", "gpt-4o")
+        resp = await chat.send_message(UserMessage(text=f"Write a professional cover letter (200 words max) for {user.get('name','')} applying to {job['title']} at {job.get('company_name','')}. Skills: {', '.join(skills)}. Bio: {bio}. Dept: {dept}. Job requires: {', '.join(job.get('required_skills',[]))}. Job desc: {job.get('description','')[:300]}"))
+        return {"cover_letter": resp.strip(), "job_title": job["title"], "company": job.get("company_name", "")}
+    except Exception as e:
+        return {"cover_letter": f"Dear Hiring Manager,\n\nI am writing to express my interest in the {job['title']} position at {job.get('company_name','')}. With skills in {', '.join(skills[:3])}, I am confident I can contribute meaningfully to your team.\n\nBest regards,\n{user.get('name','')}", "job_title": job["title"], "company": job.get("company_name", "")}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# RESUME AI ANALYZER
+# ═══════════════════════════════════════════════════════════════════
+@app.post("/api/resume/analyze")
+async def analyze_resume(request: Request):
+    """AI-powered resume analysis: score, keyword gaps, rewrite suggestions."""
+    user = await require_role("student")(request); body = await request.json()
+    job_id = body.get("job_id")
+    profile = await db.student_profiles.find_one({"user_id": user["id"]}) or {}
+    resume_text = profile.get("resume_text", "")
+    upload = await db.uploads.find_one({"user_id": user["id"], "type": "resume"})
+    if not resume_text and not upload:
+        raise HTTPException(400, "No resume found. Upload a resume or paste resume text in your profile.")
+    job = None; job_skills = []
+    if job_id:
+        try: job = await db.job_postings.find_one({"_id": ObjectId(job_id)})
+        except: pass
+        if job: job_skills = job.get("required_skills", [])
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"resume-{user['id']}", system_message="You are an expert ATS resume reviewer. Return ONLY valid JSON.").with_model("openai", "gpt-4o")
+        context = f"Resume text: {resume_text[:2000]}" if resume_text else "Resume uploaded as PDF (analyze based on profile data)"
+        job_context = f"Target job: {job['title']} at {job.get('company_name','')}. Required: {', '.join(job_skills)}" if job else "General analysis"
+        resp = await chat.send_message(UserMessage(text=f"""{context}
+Profile skills: {', '.join(profile.get('skills',[]))}. Dept: {profile.get('department','')}.
+{job_context}
+Return JSON: {{"score": 0-100, "ats_score": 0-100, "strengths": ["..."], "weaknesses": ["..."], "keyword_gaps": ["missing keywords"], "rewrite_suggestions": [{{"original": "weak bullet", "improved": "stronger version"}}], "auto_fill": {{"skills": ["detected skills"], "department": "detected dept"}}}}"""))
+        text = resp.strip()
+        if text.startswith("```"): text = text.split("\n", 1)[1].rsplit("```", 1)[0]
+        data = json.loads(text); data["has_resume"] = bool(resume_text or upload)
+        return data
+    except Exception as e:
+        student_skills = set(s.lower() for s in profile.get("skills", []))
+        missing = [s for s in job_skills if s.lower() not in student_skills] if job_skills else []
+        return {"score": 60 if resume_text else 30, "ats_score": 50, "strengths": ["Profile has skills listed"], "weaknesses": ["Add more detail to resume text"], "keyword_gaps": missing[:5], "rewrite_suggestions": [], "auto_fill": {"skills": profile.get("skills", []), "department": profile.get("department", "")}, "has_resume": bool(resume_text or upload)}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# WEASYPRINT PDF CERTIFICATES
+# ═══════════════════════════════════════════════════════════════════
+@app.get("/api/certificates/{cert_id}/pdf")
+async def generate_certificate_pdf_v2(cert_id: str):
+    """Generate a branded PDF certificate using WeasyPrint."""
+    try: cert = await db.certificates.find_one({"_id": ObjectId(cert_id)})
+    except: raise HTTPException(404, "Not found")
+    if not cert: raise HTTPException(404, "Not found")
+    student = await db.users.find_one({"_id": ObjectId(cert["student_id"])}, {"password_hash": 0})
+    name = student["name"] if student else "Unknown"
+    issue_date = cert.get("issue_date", datetime.now(timezone.utc).isoformat())[:10]
+    html = f"""<!DOCTYPE html><html><head><style>
+@page {{ size: A4 landscape; margin: 0; }}
+body {{ font-family: Georgia, serif; margin: 0; padding: 0; background: white; }}
+.cert {{ width: 297mm; height: 210mm; padding: 30mm 40mm; box-sizing: border-box; position: relative; border: 12px double #002FA7; }}
+.cert::before {{ content: ''; position: absolute; top: 8px; left: 8px; right: 8px; bottom: 8px; border: 2px solid #E8E8F0; }}
+.header {{ text-align: center; margin-bottom: 15mm; }}
+.header h1 {{ font-size: 42pt; color: #002FA7; letter-spacing: 8px; margin: 0; font-weight: 300; }}
+.header .subtitle {{ font-size: 12pt; color: #666; letter-spacing: 4px; margin-top: 5mm; }}
+.body {{ text-align: center; }}
+.body .preamble {{ font-size: 14pt; color: #555; margin-bottom: 8mm; }}
+.body .name {{ font-size: 28pt; color: #002FA7; border-bottom: 3px solid #002FA7; display: inline-block; padding: 5mm 20mm; font-weight: bold; }}
+.body .title {{ font-size: 16pt; color: #333; margin-top: 10mm; font-style: italic; }}
+.body .issuer {{ font-size: 13pt; color: #555; margin-top: 5mm; }}
+.body .date {{ font-size: 11pt; color: #888; margin-top: 8mm; }}
+.footer {{ position: absolute; bottom: 15mm; left: 40mm; right: 40mm; text-align: center; }}
+.footer .hash {{ font-family: monospace; font-size: 7pt; color: #AAA; word-break: break-all; }}
+.footer .verify {{ font-size: 8pt; color: #002FA7; margin-top: 2mm; }}
+.logo {{ font-size: 18pt; font-weight: bold; color: #002FA7; letter-spacing: 3px; }}
+</style></head><body><div class="cert">
+<div class="header"><div class="logo">UNIFY</div><h1>CERTIFICATE</h1><div class="subtitle">OF ACHIEVEMENT</div></div>
+<div class="body"><p class="preamble">This is to certify that</p><div class="name">{name}</div>
+<p class="title">{cert.get('title','')}</p><p class="issuer">Issued by: {cert.get('issuer_name','UNIFY Platform')}</p>
+{f'<p class="issuer">{cert.get("description","")}</p>' if cert.get("description") else ''}
+<p class="date">Date: {issue_date}</p></div>
+<div class="footer"><div class="hash">Verification Hash: {cert.get('blockchain_hash','')}</div><div class="verify">Verify at: unifies.codes/verify/{cert.get('blockchain_hash','')}</div></div>
+</div></body></html>"""
+    try:
+        from weasyprint import HTML
+        pdf_bytes = HTML(string=html).write_pdf()
+        return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename=UNIFY_Certificate_{cert_id[:8]}.pdf"})
+    except Exception:
+        return Response(content=html, media_type="text/html")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ANALYTICS CHARTS DATA
+# ═══════════════════════════════════════════════════════════════════
+@app.get("/api/analytics/charts")
+async def analytics_charts(request: Request):
+    """Data for Recharts: monthly bar chart, status donut, skill demand."""
+    await require_role("admin", "placement")(request)
+    now = datetime.now(timezone.utc)
+    # Monthly applications (last 6 months)
+    monthly = []
+    for i in range(5, -1, -1):
+        month_start = (now.replace(day=1) - timedelta(days=30*i)).replace(day=1)
+        month_end = (month_start + timedelta(days=32)).replace(day=1)
+        count = await db.applications.count_documents({"applied_at": {"$gte": month_start.isoformat(), "$lt": month_end.isoformat()}})
+        selected = await db.applications.count_documents({"applied_at": {"$gte": month_start.isoformat(), "$lt": month_end.isoformat()}, "status": "selected"})
+        monthly.append({"month": month_start.strftime("%b %Y"), "applications": count, "selected": selected})
+    # Status breakdown for donut
+    statuses = ["submitted", "under_review", "shortlisted", "interview_scheduled", "selected", "rejected"]
+    donut = []
+    for s in statuses:
+        c = await db.applications.count_documents({"status": s})
+        if c > 0: donut.append({"name": s.replace("_"," ").title(), "value": c})
+    # Top skills in demand
+    pipeline = [{"$unwind": "$required_skills"}, {"$group": {"_id": "$required_skills", "count": {"$sum": 1}}}, {"$sort": {"count": -1}}, {"$limit": 10}]
+    skill_demand = await db.job_postings.aggregate(pipeline).to_list(10)
+    skills_chart = [{"skill": s["_id"], "demand": s["count"]} for s in skill_demand]
+    return {"monthly": monthly, "status_donut": donut, "skill_demand": skills_chart}
+
+
+@app.get("/api/analytics/heatmap")
+async def activity_heatmap(request: Request):
+    """GitHub-style 12-week activity heatmap data for the current user."""
+    user = await get_current_user(request)
+    weeks = 12; heatmap = []
+    now = datetime.now(timezone.utc)
+    for w in range(weeks * 7 - 1, -1, -1):
+        day = (now - timedelta(days=w)).strftime("%Y-%m-%d")
+        count = await db.behavior_events.count_documents({"user_id": user["id"], "created_at": {"$regex": f"^{day}"}})
+        apps = await db.applications.count_documents({"student_id": user["id"], "applied_at": {"$regex": f"^{day}"}})
+        heatmap.append({"date": day, "count": count + apps * 3})
+    return {"heatmap": heatmap, "weeks": weeks}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# OUTCOMES RECORDING (for weight adaptation)
+# ═══════════════════════════════════════════════════════════════════
+@app.post("/api/outcomes/record")
+async def record_outcome(request: Request):
+    user = await require_role("employer", "placement", "admin")(request)
+    body = await request.json(); app_id = body.get("application_id", ""); outcome = body.get("outcome", "")
+    if outcome not in ["hired", "rejected"]: raise HTTPException(400, "outcome must be 'hired' or 'rejected'")
+    try: app_doc = await db.applications.find_one({"_id": ObjectId(app_id)})
+    except: raise HTTPException(404, "Not found")
+    if not app_doc: raise HTTPException(404, "Not found")
+    await db.hiring_outcomes.update_one({"application_id": app_id}, {"$set": {"application_id": app_id, "user_id": app_doc["student_id"], "job_id": app_doc.get("job_id"), "outcome": outcome, "recorded_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+    pred = await db.probability_predictions.find_one({"user_id": app_doc["student_id"], "job_id": app_doc.get("job_id")})
+    new_w = await _adapt_weights(outcome, pred.get("factors", {}) if pred else {})
+    return {"message": "Outcome recorded, model updated", "new_weights": new_w}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# TRENDING JOBS
+# ═══════════════════════════════════════════════════════════════════
+@app.get("/api/trending-jobs")
+async def trending_jobs(request: Request):
+    await get_current_user(request)
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+    pipeline = [{"$match": {"applied_at": {"$gte": cutoff}}}, {"$group": {"_id": "$job_id", "count": {"$sum": 1}}}, {"$sort": {"count": -1}}, {"$limit": 5}]
+    trending = await db.applications.aggregate(pipeline).to_list(5)
+    results = []
+    for t in trending:
+        try: job = await db.job_postings.find_one({"_id": ObjectId(t["_id"])})
+        except: continue
+        if job: results.append({"job_id": str(job["_id"]), "title": job.get("title",""), "company": job.get("company_name",""), "applications_48h": t["count"], "urgency": "Trending"})
+    return {"trending": results}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# WEEKLY DIGEST (Resend email)
+# ═══════════════════════════════════════════════════════════════════
+@app.post("/api/digest/send")
+async def send_weekly_digest(request: Request):
+    """Send weekly digest email to all students via Resend."""
+    await require_role("admin", "placement")(request)
+    resend_key = os.getenv("RESEND_API_KEY", ""); sender = os.getenv("SENDER_EMAIL", "onboarding@resend.dev")
+    if not resend_key: raise HTTPException(400, "Resend not configured")
+    import resend as resend_lib; resend_lib.api_key = resend_key
+    students = await db.users.find({"role": "student", "is_active": True}).to_list(500)
+    sent = 0
+    for s in students:
+        sid = str(s["_id"]); apps = await db.applications.count_documents({"student_id": sid})
+        selected = await db.applications.count_documents({"student_id": sid, "status": "selected"})
+        active_jobs = await db.job_postings.count_documents({"status": "active"})
+        try:
+            resend_lib.Emails.send({"from": sender, "to": s["email"], "subject": "UNIFY Weekly Digest",
+                "html": f"<h2>Hi {s['name']},</h2><p>You have <b>{apps}</b> applications, <b>{selected}</b> selections.</p><p><b>{active_jobs}</b> active jobs waiting for you.</p><p>— UNIFY Intelligence Engine</p>"})
+            sent += 1
+        except: pass
+    return {"message": f"Digest sent to {sent}/{len(students)} students"}
+
+@app.get("/api/digest/preview")
+async def digest_preview(request: Request):
+    user = await get_current_user(request)
+    apps = await db.applications.count_documents({"student_id": user["id"]})
+    selected = await db.applications.count_documents({"student_id": user["id"], "status": "selected"})
+    active_jobs = await db.job_postings.count_documents({"status": "active"})
+    return {"apps": apps, "selected": selected, "active_jobs": active_jobs, "name": user.get("name","")}
+
 
 # ─── WebSocket ────────────────────────────────────────────────────
 @app.websocket("/api/ws/{user_id}")

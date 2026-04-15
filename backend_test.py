@@ -161,6 +161,52 @@ class UnifyAPITester:
         """Test activity stream"""
         return self.run_test("Activity Stream", "GET", "/api/activity-stream", 200)
 
+    def test_all_roles(self):
+        """Test login for all user roles"""
+        roles = [
+            ("Student", "sibaprasadpanda56@gmail.com", "siba-4738"),
+            ("Admin", "admin@example.com", "admin123"),
+            ("Employer", "employer@unify.com", "employer123"),
+            ("Mentor", "mentor@unify.com", "mentor123"),
+            ("Placement", "placement@unify.com", "placement123")
+        ]
+        
+        role_results = {}
+        for role_name, email, password in roles:
+            print(f"\n🔐 Testing {role_name} Login")
+            success, data = self.test_login(email, password)
+            role_results[role_name] = {
+                "login_success": success,
+                "token": self.token[:20] + "..." if self.token else None,
+                "user_data": data
+            }
+            if success:
+                print(f"✅ {role_name} login successful")
+            else:
+                print(f"❌ {role_name} login failed")
+        
+        return role_results
+
+    def test_analytics_charts(self):
+        """Test analytics charts endpoint for admin"""
+        return self.run_test("Analytics Charts", "GET", "/api/analytics/charts", 200)
+
+    def test_system_health(self):
+        """Test system health endpoint for admin"""
+        return self.run_test("System Health", "GET", "/api/system-health", 200)
+
+    def test_interview_prep(self, job_id="test_job_id"):
+        """Test interview prep AI"""
+        return self.run_test("Interview Prep AI", "POST", "/api/interview-prep", 200, {"job_id": job_id})
+
+    def test_cover_letter(self, job_id="test_job_id"):
+        """Test cover letter generator"""
+        return self.run_test("Cover Letter Generator", "POST", "/api/cover-letter", 200, {"job_id": job_id})
+
+    def test_resume_analyze(self):
+        """Test resume analyzer"""
+        return self.run_test("Resume AI Analyzer", "POST", "/api/resume/analyze", 200, {"resume_text": "Sample resume text"})
+
     def save_results(self):
         """Save test results to file"""
         results_data = {
@@ -176,6 +222,52 @@ class UnifyAPITester:
         
         return results_data
 
+def test_all_roles(self):
+    """Test login for all user roles"""
+    roles = [
+        ("Student", "sibaprasadpanda56@gmail.com", "siba-4738"),
+        ("Admin", "admin@example.com", "admin123"),
+        ("Employer", "employer@unify.com", "employer123"),
+        ("Mentor", "mentor@unify.com", "mentor123"),
+        ("Placement", "placement@unify.com", "placement123")
+    ]
+    
+    role_results = {}
+    for role_name, email, password in roles:
+        print(f"\n🔐 Testing {role_name} Login")
+        success, data = self.test_login(email, password)
+        role_results[role_name] = {
+            "login_success": success,
+            "token": self.token[:20] + "..." if self.token else None,
+            "user_data": data
+        }
+        if success:
+            print(f"✅ {role_name} login successful")
+        else:
+            print(f"❌ {role_name} login failed")
+    
+    return role_results
+
+def test_analytics_charts(self):
+    """Test analytics charts endpoint for admin"""
+    return self.run_test("Analytics Charts", "GET", "/api/analytics/charts", 200)
+
+def test_system_health(self):
+    """Test system health endpoint for admin"""
+    return self.run_test("System Health", "GET", "/api/system-health", 200)
+
+def test_interview_prep(self, job_id="test_job_id"):
+    """Test interview prep AI"""
+    return self.run_test("Interview Prep AI", "POST", "/api/interview-prep", 200, {"job_id": job_id})
+
+def test_cover_letter(self, job_id="test_job_id"):
+    """Test cover letter generator"""
+    return self.run_test("Cover Letter Generator", "POST", "/api/cover-letter", 200, {"job_id": job_id})
+
+def test_resume_analyze(self):
+    """Test resume analyzer"""
+    return self.run_test("Resume AI Analyzer", "POST", "/api/resume/analyze", 200, {"resume_text": "Sample resume text"})
+
 def main():
     print("🚀 UNIFY Platform API Testing")
     print("=" * 50)
@@ -186,16 +278,17 @@ def main():
     print("\n📊 Basic Health Check")
     tester.test_health()
     
-    # Test student login
-    print("\n🔐 Student Authentication")
-    login_success, login_data = tester.test_login("sibaprasadpanda56@gmail.com", "siba-4738")
+    # Test all role logins
+    print("\n🔐 Testing All User Role Logins")
+    role_results = tester.test_all_roles()
     
-    if not login_success:
-        print("❌ Login failed - cannot proceed with authenticated tests")
+    # Continue with student token for detailed testing
+    student_login_success, _ = tester.test_login("sibaprasadpanda56@gmail.com", "siba-4738")
+    
+    if not student_login_success:
+        print("❌ Student login failed - cannot proceed with authenticated tests")
         tester.save_results()
         return 1
-    
-    print(f"✅ Login successful - Token: {tester.token[:20]}...")
     
     # Test auth verification
     tester.test_auth_me()
@@ -209,6 +302,12 @@ def main():
     print("\n🧠 Intelligence Layer (NEW)")
     tester.test_next_action()
     tester.test_control_system()
+    
+    # Test new AI features
+    print("\n🤖 New AI Features")
+    tester.test_interview_prep()
+    tester.test_cover_letter()
+    tester.test_resume_analyze()
     
     # Test hiring probability with a mock job ID
     print("\n📈 Hiring Probability Engine")
@@ -236,9 +335,18 @@ def main():
     tester.test_notifications()
     tester.test_interviews()
     
-    # Test employer-specific endpoints (will likely fail with 403 for student user)
-    print("\n🏢 Employer Features (Expected 403 for student)")
-    tester.test_best_candidates()
+    # Test admin features with admin login
+    admin_login_success, _ = tester.test_login("admin@example.com", "admin123")
+    if admin_login_success:
+        print("\n🔧 Admin Features")
+        tester.test_analytics_charts()
+        tester.test_system_health()
+    
+    # Test employer-specific endpoints
+    employer_login_success, _ = tester.test_login("employer@unify.com", "employer123")
+    if employer_login_success:
+        print("\n🏢 Employer Features")
+        tester.test_best_candidates()
     
     # Save results
     results = tester.save_results()
@@ -252,8 +360,14 @@ def main():
     print(f"Failed: {tester.tests_run - tester.tests_passed}")
     print(f"Success Rate: {results['success_rate']}")
     
+    # Print role login summary
+    print("\n🔐 Role Login Summary:")
+    for role, result in role_results.items():
+        status = "✅" if result["login_success"] else "❌"
+        print(f"{status} {role}: {'Success' if result['login_success'] else 'Failed'}")
+    
     # Categorize results
-    intelligence_tests = [r for r in tester.results if any(keyword in r['test'].lower() for keyword in ['next action', 'control', 'hiring probability', 'best candidates'])]
+    intelligence_tests = [r for r in tester.results if any(keyword in r['test'].lower() for keyword in ['next action', 'control', 'hiring probability', 'best candidates', 'interview prep', 'cover letter', 'resume analyze'])]
     intelligence_passed = sum(1 for t in intelligence_tests if t['success'])
     
     print(f"\n🧠 Intelligence Layer: {intelligence_passed}/{len(intelligence_tests)} passed")

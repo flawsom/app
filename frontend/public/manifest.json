@@ -1,0 +1,13 @@
+{
+  "name": "UNIFY - Adaptive Placement Intelligence",
+  "short_name": "UNIFY",
+  "description": "The OS that predicts and improves hiring outcomes",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#010104",
+  "theme_color": "#00E5FF",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
