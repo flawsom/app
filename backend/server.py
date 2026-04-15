@@ -230,11 +230,58 @@ async def login(req: LoginReq, response: Response, request: Request):
 @app.post("/api/auth/logout")
 async def logout(response: Response, request: Request):
     user = await get_current_user(request); clear_auth_cookies(response)
+    # Also clear Google OAuth session
+    response.delete_cookie("session_token", path="/")
+    await db.user_sessions.delete_many({"user_id": user["id"]})
     await audit_log(user["id"], "logout"); return {"message": "Logged out"}
 
 @app.get("/api/auth/me")
 async def me(request: Request):
     return await get_current_user(request)
+
+# ─── Google OAuth (Emergent Auth) ─────────────────────────────────
+@app.post("/api/auth/google/session")
+async def google_auth_session(request: Request, response: Response):
+    """Exchange Emergent Auth session_id for a UNIFY JWT token."""
+    body = await request.json(); session_id = body.get("session_id", "")
+    if not session_id: raise HTTPException(400, "session_id required")
+    import requests as http_requests
+    try:
+        resp = http_requests.get("https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
+            headers={"X-Session-ID": session_id}, timeout=10)
+        if resp.status_code != 200: raise HTTPException(401, "Invalid session")
+        data = resp.json()
+    except Exception as e:
+        raise HTTPException(401, f"OAuth session exchange failed: {str(e)[:100]}")
+    email = data.get("email", "").lower().strip()
+    name = data.get("name", "")
+    picture = data.get("picture", "")
+    session_token = data.get("session_token", "")
+    if not email: raise HTTPException(400, "No email returned from OAuth")
+    now = datetime.now(timezone.utc).isoformat()
+    # Find or create user
+    user = await db.users.find_one({"email": email})
+    if user:
+        uid = str(user["_id"])
+        await db.users.update_one({"_id": user["_id"]}, {"$set": {"name": name or user.get("name",""), "picture": picture, "updated_at": now}})
+    else:
+        user_doc = {"email": email, "password_hash": "", "name": name, "role": "student",
+                    "is_active": True, "picture": picture, "auth_provider": "google",
+                    "created_at": now, "updated_at": now}
+        r = await db.users.insert_one(user_doc); uid = str(r.inserted_id)
+        # Create student profile
+        parts = name.split(" ", 1)
+        await db.student_profiles.insert_one({"user_id": uid, "first_name": parts[0], "last_name": parts[1] if len(parts) > 1 else "", "skills": [], "created_at": now, "updated_at": now})
+    # Store Emergent session
+    await db.user_sessions.update_one({"user_id": uid}, {"$set": {"user_id": uid, "session_token": session_token,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(), "created_at": now}}, upsert=True)
+    # Issue UNIFY JWT
+    access = create_access_token(uid, email); refresh = create_refresh_token(uid)
+    set_auth_cookies(response, access, refresh)
+    response.set_cookie("session_token", session_token, httponly=True, path="/", max_age=604800, **({k: v for k, v in COOKIE_KW.items() if k not in ["httponly","path"]}))
+    await audit_log(uid, "google_login", {"email": email})
+    user_data = await db.users.find_one({"_id": ObjectId(uid)})
+    result = clean_user(user_data); result["access_token"] = access; return result
 
 @app.post("/api/auth/refresh")
 async def refresh(request: Request, response: Response):
