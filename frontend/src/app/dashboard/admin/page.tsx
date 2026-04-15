@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import EmployerDashboard from "./EmployerDashboard";
+import EmployerDashboard from "./AdminDashboard";
 
 export const dynamic = "force-dynamic";
 
