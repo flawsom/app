@@ -5,10 +5,11 @@ import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { api, apiPost } from '@/lib/api';
 import { Notification } from '@/types';
+import { useI18n, LOCALE_LABELS, Locale } from '@/i18n';
 import {
   Briefcase, FileText, Award, Users, BarChart3,
   Settings, LogOut, Bell, GraduationCap, Building2, Menu, X, Zap, Activity,
-  Target, Medal, Sun, Moon
+  Target, Medal, Sun, Moon, Globe
 } from 'lucide-react';
 import ChatBot from '@/components/ChatBot';
 
@@ -64,6 +65,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [showNotifs, setShowNotifs] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(true);
+  const [showLangMenu, setShowLangMenu] = useState(false);
+  const { locale, setLocale, t } = useI18n();
 
   useEffect(() => {
     if (user === false) router.push('/login');
@@ -169,12 +172,30 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </nav>
 
         <div className="p-3 border-t space-y-1" style={{ borderColor: 'var(--border-subtle)' }}>
+          {/* Language Selector */}
+          <div className="relative">
+            <button onClick={() => setShowLangMenu(!showLangMenu)} className="w-full flex items-center gap-3 px-3 py-2.5 text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-white/[0.02] transition-all rounded-md" data-testid="lang-toggle">
+              <Globe className="w-3.5 h-3.5" />
+              {LOCALE_LABELS[locale]}
+            </button>
+            {showLangMenu && (
+              <div className="absolute bottom-full left-0 mb-1 w-full glass-strong rounded-md shadow-lg z-50 overflow-hidden" data-testid="lang-menu">
+                {(Object.keys(LOCALE_LABELS) as Locale[]).map(l => (
+                  <button key={l} onClick={() => { setLocale(l); setShowLangMenu(false); }}
+                    className={`w-full text-left px-3 py-2 text-xs transition-colors ${locale === l ? 'text-[var(--cyan)] bg-[var(--cyan)]/[0.05]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-white/[0.02]'}`}
+                    data-testid={`lang-${l}`}>
+                    {LOCALE_LABELS[l]}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <button onClick={toggleTheme} className="w-full flex items-center gap-3 px-3 py-2.5 text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-white/[0.02] transition-all rounded-md" data-testid="theme-toggle">
             {darkMode ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
-            {darkMode ? 'Light Mode' : 'Dark Mode'}
+            {darkMode ? t('common.lightMode') : t('common.darkMode')}
           </button>
           <button onClick={handleLogout} className="w-full flex items-center gap-3 px-3 py-2.5 text-xs text-[var(--text-muted)] hover:text-red-400 hover:bg-red-500/5 transition-all duration-300 rounded-md" data-testid="nav-logout">
-            <LogOut className="w-3.5 h-3.5" /> Sign Out
+            <LogOut className="w-3.5 h-3.5" /> {t('common.signOut')}
           </button>
         </div>
       </aside>

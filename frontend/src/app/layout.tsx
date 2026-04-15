@@ -1,6 +1,7 @@
 import './globals.css';
 import { AuthProvider } from '@/lib/auth-context';
 import { QueryProvider } from '@/lib/query-provider';
+import { I18nProvider } from '@/i18n';
 
 export const metadata = {
   title: 'UNIFY | Adaptive Placement Intelligence',
@@ -16,9 +17,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className="antialiased" style={{ background: '#010104', color: '#F0F0F5' }}>
         <QueryProvider>
-          <AuthProvider>
-            {children}
-          </AuthProvider>
+          <I18nProvider>
+            <AuthProvider>
+              {children}
+            </AuthProvider>
+          </I18nProvider>
         </QueryProvider>
       </body>
     </html>

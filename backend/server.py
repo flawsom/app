@@ -9,20 +9,83 @@ from contextlib import asynccontextmanager
 from typing import Optional, List
 from bson import ObjectId
 from dotenv import load_dotenv
-import os, jwt, bcrypt, hashlib, secrets, json, asyncio, csv, io, base64
+import os, jwt, bcrypt, hashlib, secrets, json, asyncio, csv, io, base64, logging
 
+logger = logging.getLogger("unify")
 load_dotenv()
 MONGO_URL = os.getenv("MONGO_URL")
-DB_NAME = os.getenv("DB_NAME")
+DB_NAME = os.getenv("DB_NAME", "project_unify")
 JWT_SECRET = os.getenv("JWT_SECRET", "secret")
 JWT_ALGORITHM = "HS256"
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@example.com")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 EMERGENT_LLM_KEY = os.getenv("EMERGENT_LLM_KEY", "")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+REDIS_URL = os.getenv("REDIS_URL", "")
 
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
+
+# ─── Redis Graceful Fallback ──────────────────────────────────────
+class RedisCache:
+    """Redis wrapper with graceful fallback to in-memory dict."""
+    def __init__(self):
+        self._redis = None
+        self._memory: dict = {}
+        self._connected = False
+
+    async def connect(self):
+        if not REDIS_URL:
+            logger.info("Redis: No REDIS_URL configured, using in-memory fallback")
+            return
+        try:
+            import redis.asyncio as aioredis
+            self._redis = aioredis.from_url(REDIS_URL, decode_responses=True, socket_timeout=3)
+            await self._redis.ping()
+            self._connected = True
+            logger.info("Redis: Connected successfully")
+        except Exception as e:
+            logger.warning(f"Redis: Connection failed ({e}), using in-memory fallback")
+            self._redis = None
+            self._connected = False
+
+    async def get(self, key: str) -> Optional[str]:
+        if self._connected:
+            try: return await self._redis.get(key)
+            except: pass
+        return self._memory.get(key)
+
+    async def set(self, key: str, value: str, ex: int = 300):
+        if self._connected:
+            try: await self._redis.set(key, value, ex=ex); return
+            except: pass
+        self._memory[key] = value
+
+    async def delete(self, key: str):
+        if self._connected:
+            try: await self._redis.delete(key); return
+            except: pass
+        self._memory.pop(key, None)
+
+    async def incr(self, key: str) -> int:
+        if self._connected:
+            try: return await self._redis.incr(key)
+            except: pass
+        self._memory[key] = self._memory.get(key, 0) + 1
+        return self._memory[key]
+
+    async def expire(self, key: str, seconds: int):
+        if self._connected:
+            try: await self._redis.expire(key, seconds)
+            except: pass
+
+    async def ttl(self, key: str) -> int:
+        if self._connected:
+            try: return await self._redis.ttl(key)
+            except: pass
+        return -1
+
+cache = RedisCache()
 
 # ─── Pydantic Models ──────────────────────────────────────────────
 class LoginReq(BaseModel):
@@ -170,10 +233,15 @@ async def create_indexes():
 
 @asynccontextmanager
 async def lifespan(app):
+    await cache.connect()
     await create_indexes(); await seed_database(); yield
 
 app = FastAPI(title="UNIFY API", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=[FRONTEND_URL, "https://www.unifies.codes", "https://unifies.codes"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=[
+    FRONTEND_URL,
+    "https://www.unifies.codes", "https://unifies.codes",
+    "https://unifies.onrender.com",
+], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 # ─── Health ───────────────────────────────────────────────────────
 @app.get("/api/health")
@@ -212,6 +280,12 @@ async def login(req: LoginReq, response: Response, request: Request):
     email = req.email.lower().strip()
     ip = request.client.host if request.client else "unknown"
     identifier = f"{ip}:{email}"
+    # Redis-first rate limiting with MongoDB fallback
+    rate_key = f"login_attempts:{identifier}"
+    attempts = await cache.get(rate_key)
+    if attempts and int(attempts) >= 5:
+        raise HTTPException(429, "Too many failed attempts. Try again in 15 minutes.")
+    # MongoDB fallback check
     attempt = await db.login_attempts.find_one({"identifier": identifier})
     if attempt and attempt.get("attempts", 0) >= 5:
         locked = attempt.get("locked_until")
@@ -219,8 +293,10 @@ async def login(req: LoginReq, response: Response, request: Request):
         else: await db.login_attempts.delete_one({"identifier": identifier})
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(req.password, user["password_hash"]):
+        await cache.incr(rate_key); await cache.expire(rate_key, 900)
         await db.login_attempts.update_one({"identifier": identifier}, {"$inc": {"attempts": 1}, "$set": {"locked_until": (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()}}, upsert=True)
         raise HTTPException(401, "Invalid email or password")
+    await cache.delete(rate_key)
     await db.login_attempts.delete_one({"identifier": identifier})
     uid = str(user["_id"]); access = create_access_token(uid, email); refresh = create_refresh_token(uid)
     set_auth_cookies(response, access, refresh)
@@ -747,10 +823,20 @@ async def activity_stream(request: Request):
     activities = [{"type": "application", "action": f"Applied to {a.get('job_title','')} at {a.get('company_name','')}", "status": a.get("status","submitted"), "timestamp": a.get("applied_at",""), "meta": {"job_id": a.get("job_id","")}} for a in apps]
     return {"activities": activities}
 
-# ─── Leaderboard ──────────────────────────────────────────────────
+# ─── Leaderboard (Redis-cached) ───────────────────────────────────
 @app.get("/api/leaderboard")
 async def get_leaderboard(request: Request, category: str = "xp"):
     user = await get_current_user(request)
+    # Try Redis cache first (60s TTL)
+    cache_key = f"leaderboard:{category}"
+    cached = await cache.get(cache_key)
+    if cached:
+        data = json.loads(cached)
+        # Fix is_you for current user
+        for r in data.get("rankings", []):
+            r["is_you"] = r["user_id"] == user["id"]
+        data["your_rank"] = next((r for r in data["rankings"] if r["is_you"]), None)
+        return data
     students = await db.users.find({"role": "student", "is_active": True}).to_list(500)
     rankings = []
     for s in students:
@@ -768,7 +854,10 @@ async def get_leaderboard(request: Request, category: str = "xp"):
     rankings.sort(key=lambda x: -x[sort_key])
     for i, r in enumerate(rankings): r["rank"] = i + 1
     your_rank = next((r for r in rankings if r["is_you"]), None)
-    return {"rankings": rankings[:20], "your_rank": your_rank, "total_students": len(rankings), "departments": [], "fastest_to_placement": [], "category": category}
+    result = {"rankings": rankings[:20], "your_rank": your_rank, "total_students": len(rankings), "departments": [], "fastest_to_placement": [], "category": category}
+    # Cache for 60 seconds
+    await cache.set(cache_key, json.dumps(result), ex=60)
+    return result
 
 # ─── Chatbot ──────────────────────────────────────────────────────
 @app.post("/api/chatbot")
