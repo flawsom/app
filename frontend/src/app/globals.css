@@ -386,7 +386,24 @@ html.light ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); }
 /* ═══ RESPONSIVE ═══ */
 @media (max-width: 768px) {
   .card { padding: 0.875rem; }
-  .data-table th, .data-table td { padding: 0.375rem 0.5rem; font-size: 0.75rem; }
+  .data-table th, .data-table td { padding: 0.375rem 0.5rem; font-size: 0.7rem; }
+  .data-table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .card-glow { padding: 1rem; }
+  .input-field { font-size: 16px; } /* Prevents iOS zoom on focus */
+}
+
+@media (max-width: 480px) {
+  .card { padding: 0.75rem; }
+  .btn-primary, .btn-secondary { font-size: 0.7rem; padding: 0.5rem 0.75rem; }
+  .glass-strong { backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+}
+
+/* Ensure text never overflows viewport */
+h1, h2, h3, p, span, a { overflow-wrap: break-word; word-wrap: break-word; }
+
+/* Fix sidebar scrolling on short screens */
+@media (max-height: 700px) {
+  .sidebar-glass nav { max-height: calc(100vh - 200px); overflow-y: auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,256 +1,197 @@
 {
-  "test_run_timestamp": "2026-04-15T03:43:47.206595",
-  "total_tests": 31,
-  "passed_tests": 28,
-  "success_rate": "90.3%",
+  "timestamp": "2026-04-15T04:28:45.711176",
+  "total_tests": 27,
+  "passed_tests": 25,
+  "success_rate": "92.6%",
   "results": [
     {
       "test": "Health Check",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:26.019648"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Login",
+      "test": "Login student",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:26.577408"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Login",
+      "test": "Login admin",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:27.103276"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Login",
+      "test": "Login employer",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:27.592965"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Login",
+      "test": "Login mentor",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:28.084518"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Login",
+      "test": "Login placement",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:28.570240"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Login",
+      "test": "/api/auth/me (student)",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:29.047440"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Auth Me",
+      "test": "/api/profile (student)",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:29.198842"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Get Profile",
+      "test": "/api/profile/strength (student)",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:29.383834"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Profile Strength",
+      "test": "/api/next-action (student)",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:29.515901"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Next Action Intelligence",
-      "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:29.670311"
-    },
-    {
-      "test": "Control System",
-      "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:29.868591"
-    },
-    {
-      "test": "Interview Prep AI",
+      "test": "/api/recommendations (student)",
       "success": false,
-      "details": "Request timeout",
-      "expected_status": 200,
-      "actual_status": "TIMEOUT",
-      "timestamp": "2026-04-15T03:43:39.960289"
+      "status_code": 403,
+      "error": "Expected 200, got 403",
+      "response_data": null
     },
     {
-      "test": "Cover Letter Generator",
+      "test": "/api/skill-gap (student)",
       "success": false,
-      "details": "API Error: Job not found",
-      "expected_status": 200,
-      "actual_status": 404,
-      "timestamp": "2026-04-15T03:43:41.363208"
+      "status_code": 403,
+      "error": "Expected 200, got 403",
+      "response_data": null
     },
     {
-      "test": "Resume AI Analyzer",
+      "test": "/api/momentum (student)",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:43.534318"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Hiring Probability",
-      "success": false,
-      "details": "API Error: Job not found",
-      "expected_status": 200,
-      "actual_status": 404,
-      "timestamp": "2026-04-15T03:43:43.688797"
-    },
-    {
-      "test": "Jobs List",
+      "test": "/api/leaderboard (student)",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:43.860012"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Applications List",
+      "test": "/api/activity-stream (student)",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:44.024711"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "AI Recommendations",
+      "test": "/api/jobs (student)",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:44.211888"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Skill Gap Analysis",
+      "test": "/api/applications (student)",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:44.405500"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Momentum System",
+      "test": "/api/certificates (student)",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:44.569052"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Leaderboard",
+      "test": "/api/notifications (student)",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:44.716180"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Activity Stream",
+      "test": "/api/interviews (student)",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:44.857910"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Certificates List",
+      "test": "/api/jobs (employer)",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:44.993284"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Notifications",
+      "test": "/api/applications (employer)",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:45.175280"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Interviews",
+      "test": "/api/users (admin)",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:45.339788"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Login",
+      "test": "/api/analytics/overview (admin)",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:45.975588"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Analytics Charts",
+      "test": "/api/analytics/placements (admin)",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:46.232400"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "System Health",
+      "test": "/api/behavior/track (student)",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:46.466607"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     },
     {
-      "test": "Login",
+      "test": "/api/chatbot (student)",
       "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:47.062108"
-    },
-    {
-      "test": "Best Candidates",
-      "success": true,
-      "details": "",
-      "expected_status": null,
-      "actual_status": null,
-      "timestamp": "2026-04-15T03:43:47.205072"
+      "status_code": 200,
+      "error": null,
+      "response_data": null
     }
   ]
 }

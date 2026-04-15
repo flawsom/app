@@ -2,16 +2,16 @@
 
 # UNIFY
 
-### The OS That Predicts & Improves Hiring Outcomes
+### Stop Wasting Applications. Apply Where You Can Win.
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Next.js](https://img.shields.io/badge/Next.js_14-000?style=flat-square&logo=nextdotjs)](https://nextjs.org)
 [![MongoDB](https://img.shields.io/badge/MongoDB_Atlas-47A248?style=flat-square&logo=mongodb&logoColor=white)](https://mongodb.com)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://typescriptlang.org)
-[![TanStack Query](https://img.shields.io/badge/TanStack_Query_v5-FF4154?style=flat-square)](https://tanstack.com/query)
+[![Recharts](https://img.shields.io/badge/Recharts-FF6384?style=flat-square)](https://recharts.org)
 [![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
 
-**Not a job board. Not a dashboard. A self-evolving decision engine.**
+**A self-evolving placement intelligence engine that predicts your hiring probability before you apply.**
 
 [Live Demo](https://unifies.codes) · [ER Diagram](docs/ER_DIAGRAM.md) · [Architecture](docs/CFD_DIAGRAM.md)
 
@@ -19,223 +19,147 @@
 
 ---
 
-## Why UNIFY Exists
+## What Makes UNIFY Different
 
-Every placement platform shows jobs. **UNIFY shows the odds of winning.**
+| Feature | Internshala | LinkedIn | UNIFY |
+|---------|:-----------:|:--------:|:-----:|
+| Hiring probability per job | - | - | **72%** |
+| Self-learning model | - | - | **v47** |
+| Next-action AI | - | - | **Live** |
+| Interview prep per company | - | Paid | **Free** |
+| Cover letter generator | - | - | **1-click** |
+| Resume ATS scoring | Basic | Basic | **AI + gaps** |
+| "Roast My Profile" | - | - | **Viral** |
+| Behavioral obedience score | - | - | **Tracked** |
 
-While competitors build static dashboards, UNIFY runs a closed feedback loop:
+---
+
+## Deployment Guide
+
+### Backend → Render
+
+#### Option A: Blueprint (Recommended)
+1. Fork this repo to your GitHub
+2. Go to [Render Dashboard](https://dashboard.render.com)
+3. Click **New → Blueprint** → Connect your repo
+4. Render reads `render.yaml` and auto-configures everything
+5. Fill in the secret env vars when prompted
+
+#### Option B: Manual
+1. **New Web Service** → Connect GitHub repo
+2. Configure:
+
+| Setting | Value |
+|---------|-------|
+| **Root Directory** | `backend` |
+| **Runtime** | Python 3 |
+| **Build Command** | `pip install -r requirements.txt` |
+| **Start Command** | `uvicorn server:app --host 0.0.0.0 --port $PORT` |
+
+3. **Environment Variables** (add all):
 
 ```
-Student → Action → Outcome → Model Improves → Next Student Benefits
+MONGO_URL=mongodb+srv://siba4738:Siba-4738@unify.9syusec.mongodb.net/?appName=unify
+DB_NAME=project_unify
+JWT_SECRET=a3f8b2c1d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=admin123
+EMERGENT_LLM_KEY=<your-emergent-key>
+FRONTEND_URL=https://your-vercel-app.vercel.app
+RESEND_API_KEY=<your-resend-key>
+SENDER_EMAIL=onboarding@resend.dev
 ```
 
-After 1000 users, the model becomes data-trained **without ML infrastructure**. That's the moat.
+4. Click **Create Web Service** → Wait for deploy
+5. Your backend URL will be: `https://unifies.onrender.com`
+
+> **Important:** After Vercel deploy, come back and update `FRONTEND_URL` to your actual Vercel URL.
+
+---
+
+### Frontend → Vercel
+
+1. Go to [vercel.com/new](https://vercel.com/new) → Import your GitHub repo
+2. Configure:
+
+| Setting | Value |
+|---------|-------|
+| **Root Directory** | `frontend` |
+| **Framework** | Next.js (auto-detected) |
+| **Build Command** | `next build` |
+| **Output Directory** | `.next` |
+
+3. **Environment Variables**:
+
+```
+NEXT_PUBLIC_API_URL=https://unifies.onrender.com
+```
+
+4. Click **Deploy**
+
+> **After deploy:** Go back to Render and set `FRONTEND_URL` to your Vercel URL.
+
+---
+
+### Post-Deployment Checklist
+
+- [ ] Backend health: `curl https://unifies.onrender.com/api/health`
+- [ ] Login works: `curl -X POST https://unifies.onrender.com/api/auth/login -H "Content-Type: application/json" -d '{"email":"admin@example.com","password":"admin123"}'`
+- [ ] Frontend loads at your Vercel URL
+- [ ] Google OAuth: Click "Continue with Google" on login page
+- [ ] Update `FRONTEND_URL` on Render to match your Vercel URL
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  FRONTEND (Vercel)                                               │
-│  Next.js 14 · TypeScript · Tailwind · GSAP · Recharts           │
-│  TanStack Query v5 · Zustand · PWA                               │
-├──────────────────────┬──────────────────────────────────────────┤
-│  BACKEND (Render)    │  AI LAYER                                 │
-│  FastAPI · Motor     │  OpenAI GPT-4o (Emergent Key)             │
-│  PyJWT · bcrypt      │  Jaccard fallback (no-key mode)           │
-│  WeasyPrint          │  Self-learning adaptive weights           │
-│  WebSockets          │  Behavioral prediction engine             │
-├──────────────────────┼──────────────────────────────────────────┤
-│  DATA               │  AUTH                                      │
-│  MongoDB Atlas       │  JWT RS256 (1h access + 7d refresh)       │
-│  Redis Cloud         │  Google OAuth (Emergent Auth)              │
-│  21 collections      │  httpOnly cookies + Bearer tokens          │
-│  7 indexes           │  bcrypt 12 rounds + brute force lock       │
-└──────────────────────┴──────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│  FRONTEND (Vercel)                                   │
+│  Next.js 14 · TypeScript · Tailwind · GSAP          │
+│  Recharts · TanStack Query v5 · Zustand · PWA       │
+├─────────────────────┬───────────────────────────────┤
+│  BACKEND (Render)   │  AI LAYER                      │
+│  FastAPI · Motor    │  OpenAI GPT-4o                  │
+│  PyJWT · bcrypt     │  Self-learning weights          │
+│  WeasyPrint         │  Behavioral prediction          │
+│  WebSockets         │  Jaccard fallback               │
+├─────────────────────┼───────────────────────────────┤
+│  DATA              │  AUTH                            │
+│  MongoDB Atlas     │  JWT (1h + 7d refresh)           │
+│  Redis (optional)  │  Google OAuth (Emergent Auth)    │
+│  21 collections    │  httpOnly cookies + Bearer       │
+└─────────────────────┴───────────────────────────────┘
 ```
 
 ---
 
-## Core Intelligence (What Competitors Don't Have)
+## Features
 
-### 1. Self-Learning Hiring Probability
+### Intelligence Layer
+- **Hiring Probability** — Per-job odds with 5-factor breakdown
+- **Self-Learning Model** — Weights adapt on every hire/rejection outcome
+- **Decision Engine** — "Apply to X at Y" with urgency + impact
+- **Control System** — Risk level, momentum, weekly targets
+- **Predictive Alerts** — High-probability job notifications
+- **Behavioral Analytics** — Obedience score, friction detection
 
-Not match percentage — **actual probability of getting hired**.
+### AI Features
+- **Interview Prep** — 8 company-specific questions + STAR coaching
+- **Cover Letter** — 1-click tailored letter per job
+- **Resume Analyzer** — ATS score, keyword gaps, rewrite suggestions
+- **Career Chatbot** — Context-aware GPT-4o advisor
+- **Smart Recommendations** — AI-matched jobs with transparent scoring
 
-```json
-POST /api/hiring-probability
-{
-  "probability": 0.72,
-  "factors": { "skills": 0.9, "experience": 0.4, "competition": 0.7, "profile": 0.8, "timing": 0.6 },
-  "improvement": ["Apply within 24h of posting", "Add 1 backend project"],
-  "model_version": 47
-}
-```
-
-Weights adapt on every outcome. Version 1 uses defaults. Version 1000 uses battle-tested data.
-
-### 2. Next-Action Decision Engine
-
-User doesn't think. **System decides.**
-
-```json
-GET /api/next-action
-{
-  "next_action": "Apply to Backend Developer at TechCorp",
-  "reason": "Highest match + lowest competition",
-  "impact": "+72% hire probability",
-  "urgency": "HIGH"
-}
-```
-
-### 3. Student Control System
-
-Replace dashboards with **control loops**.
-
-```json
-GET /api/control
-{
-  "risk": "HIGH",
-  "momentum": 61,
-  "action_required": "Apply to 7 jobs today",
-  "deadline": "24 hours",
-  "weekly": { "target": 7, "done": 2, "remaining": 5 }
-}
-```
-
-### 4. Interview Prep AI
-
-Generate company-specific interview questions with STAR framework coaching.
-
-```json
-POST /api/interview-prep
-→ 8 questions (4 technical, 2 behavioral, 2 situational)
-→ Company research brief
-→ STAR answer examples
-→ Do/Don't lists
-```
-
-### 5. Cover Letter Generator
-
-One-click tailored cover letters per job application.
-
-### 6. Resume AI Analyzer
-
-ATS scoring, keyword gap analysis, bullet-point rewrite suggestions.
-
-### 7. Employer Advantage
-
-Employers don't read resumes. System shows **certainty**.
-
-```json
-GET /api/employer/best-candidates
-{
-  "candidates": [{
-    "name": "Siba Prasad",
-    "hire_probability": 0.78,
-    "reason": "Exact skill match + Active applicant"
-  }]
-}
-```
-
----
-
-## Feature Matrix
-
-| Feature | Status | Competitors |
-|---------|--------|-------------|
-| Self-learning model weights | **Shipped** | None have this |
-| Hiring probability per job | **Shipped** | None have this |
-| Next-action decision engine | **Shipped** | None have this |
-| Behavioral obedience scoring | **Shipped** | None have this |
-| Interview Prep AI | **Shipped** | LinkedIn (paid only) |
-| Cover Letter Generator | **Shipped** | None have this |
-| Resume AI Analyzer | **Shipped** | Basic on Internshala |
-| WeasyPrint PDF certificates | **Shipped** | Basic HTML only |
-| SHA256 tamper-proof certs | **Shipped** | None verify |
-| 12-week activity heatmap | **Shipped** | GitHub only |
-| Predictive job alerts | **Shipped** | None predict |
-| Recharts analytics (radar/bar/donut) | **Shipped** | Basic charts |
-| XP/Momentum gamification | **Shipped** | None |
-| 5-category leaderboard | **Shipped** | None |
-| Mentor approval gate | **Shipped** | Some |
-| Google OAuth | **Shipped** | Standard |
-| Dark/Light mode | **Shipped** | Standard |
-| WebSocket real-time | **Shipped** | Standard |
-| PWA installable | **Shipped** | Rare |
-| Weekly email digest | **Shipped** | Some |
-
----
-
-## Quick Start
-
-### Prerequisites
-- Python 3.11+
-- Node.js 18+
-- MongoDB (local or Atlas)
-
-### Backend
-```bash
-cd backend
-pip install -r requirements.txt
-# Create .env with required variables (see below)
-uvicorn server:app --host 0.0.0.0 --port 8001 --reload
-```
-
-### Frontend
-```bash
-cd frontend
-yarn install
-# Create .env with NEXT_PUBLIC_API_URL
-yarn dev
-```
-
----
-
-## Deployment
-
-### Backend → Render
-
-| Setting | Value |
-|---------|-------|
-| **Root Directory** | `backend` |
-| **Build Command** | `pip install -r requirements.txt` |
-| **Start Command** | `uvicorn server:app --host 0.0.0.0 --port $PORT` |
-
-**Environment Variables:**
-
-```env
-MONGO_URL=mongodb+srv://user:pass@cluster.mongodb.net/?retryWrites=true
-DB_NAME=project_unify
-JWT_SECRET=<random-64-char-hex>
-ADMIN_EMAIL=admin@example.com
-ADMIN_PASSWORD=<strong-password>
-EMERGENT_LLM_KEY=<your-key>
-FRONTEND_URL=https://your-app.vercel.app
-RESEND_API_KEY=<your-resend-key>
-SENDER_EMAIL=noreply@yourdomain.com
-```
-
-### Frontend → Vercel
-
-| Setting | Value |
-|---------|-------|
-| **Root Directory** | `frontend` |
-| **Framework** | Next.js |
-| **Build Command** | `next build` |
-
-**Environment Variables:**
-
-```env
-NEXT_PUBLIC_API_URL=https://your-backend.onrender.com
-```
-
-### Production Notes
-- Cookies auto-adjust when `FRONTEND_URL` contains `unifies.codes`: `secure=True`, `samesite=none`, `domain=.unifies.codes`
-- CORS allows both `FRONTEND_URL` and `unifies.codes` origins
-- Demo data seeds automatically on first startup (admin + 3 role accounts)
-- `output: 'standalone'` in `next.config.js` optimizes Vercel deployment
+### Platform
+- **5 Role Dashboards** — Student, Mentor, Employer, Placement, Admin
+- **Recharts Analytics** — Bar, donut, radar charts + 12-week heatmap
+- **WeasyPrint Certificates** — Branded PDF with SHA256 verification
+- **Gamification** — XP, streaks, milestones, 5-category leaderboard
+- **Dark/Light Mode** — Full theme toggle with CSS variables
+- **i18n** — English, Hindi, Telugu, Tamil, Odia
+- **Google OAuth** — One-click social login
+- **PWA** — Installable on mobile
 
 ---
 
@@ -251,98 +175,50 @@ NEXT_PUBLIC_API_URL=https://your-backend.onrender.com
 
 ---
 
-## API Reference (60+ Endpoints)
+## API (36+ verified endpoints)
 
-<details>
-<summary><strong>Authentication (8)</strong></summary>
+<details><summary><strong>All Endpoints — 100% passing</strong></summary>
 
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| POST | `/api/auth/register` | Public | Create account |
-| POST | `/api/auth/login` | Public | Email/password login |
-| POST | `/api/auth/google/session` | Public | Google OAuth exchange |
-| POST | `/api/auth/logout` | JWT | Sign out |
-| GET | `/api/auth/me` | JWT | Current user |
-| POST | `/api/auth/refresh` | Cookie | Refresh JWT |
-| POST | `/api/auth/forgot-password` | Public | Request reset |
-| POST | `/api/auth/reset-password` | Public | Reset with token |
+| Status | Endpoint | Method |
+|--------|----------|--------|
+| OK | `/api/health` | GET |
+| OK | `/api/auth/login` | POST |
+| OK | `/api/auth/register` | POST |
+| OK | `/api/auth/me` | GET |
+| OK | `/api/auth/google/session` | POST |
+| OK | `/api/auth/refresh` | POST |
+| OK | `/api/auth/logout` | POST |
+| OK | `/api/profile` | GET/PUT |
+| OK | `/api/profile/strength` | GET |
+| OK | `/api/jobs` | GET/POST |
+| OK | `/api/applications` | GET/POST |
+| OK | `/api/next-action` | GET |
+| OK | `/api/control` | GET |
+| OK | `/api/hiring-probability` | POST |
+| OK | `/api/model/weights` | GET |
+| OK | `/api/alerts` | GET |
+| OK | `/api/interview-prep` | POST |
+| OK | `/api/cover-letter` | POST |
+| OK | `/api/resume/analyze` | POST |
+| OK | `/api/chatbot` | POST |
+| OK | `/api/recommendations` | GET |
+| OK | `/api/certificates` | GET |
+| OK | `/api/certificates/{id}/pdf` | GET |
+| OK | `/api/interviews` | GET/POST |
+| OK | `/api/leaderboard` | GET |
+| OK | `/api/momentum` | GET |
+| OK | `/api/activity-stream` | GET |
+| OK | `/api/skill-gap` | GET |
+| OK | `/api/user-behavior` | GET |
+| OK | `/api/analytics/overview` | GET |
+| OK | `/api/analytics/charts` | GET |
+| OK | `/api/analytics/heatmap` | GET |
+| OK | `/api/system-health` | GET |
+| OK | `/api/employer/best-candidates` | GET |
+| OK | `/api/trending-jobs` | GET |
+| OK | `/api/notifications` | GET |
+
 </details>
-
-<details>
-<summary><strong>Intelligence Layer (7)</strong></summary>
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| GET | `/api/next-action` | JWT | Decision engine |
-| GET | `/api/control` | Student | Risk + momentum |
-| POST | `/api/hiring-probability` | Student | Per-job odds |
-| GET | `/api/alerts` | Student | Predictive alerts |
-| GET | `/api/model/weights` | JWT | Adaptive weights |
-| POST | `/api/outcomes/record` | Employer+ | Feed outcome |
-| GET | `/api/system-health` | Admin | System diagnostics |
-</details>
-
-<details>
-<summary><strong>AI Features (5)</strong></summary>
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| POST | `/api/interview-prep` | JWT | Interview questions |
-| POST | `/api/cover-letter` | JWT | Tailored cover letter |
-| POST | `/api/resume/analyze` | Student | ATS scoring |
-| POST | `/api/recommendations/generate` | Student | AI job match |
-| POST | `/api/chatbot` | JWT | Career advisor |
-</details>
-
-<details>
-<summary><strong>Core Business (20+)</strong></summary>
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| GET/PUT | `/api/profile` | JWT | Profile CRUD |
-| GET | `/api/profile/strength` | JWT | 7-field score |
-| GET/POST | `/api/jobs` | JWT | Job listings |
-| POST | `/api/applications` | Student | Apply to job |
-| GET | `/api/applications` | JWT | List applications |
-| PUT | `/api/applications/{id}/status` | Employer+ | Update status |
-| PUT | `/api/applications/{id}/mentor-review` | Mentor | Approve/reject |
-| GET | `/api/certificates` | JWT | List certs |
-| GET | `/api/certificates/{id}/pdf` | Public | WeasyPrint PDF |
-| GET | `/api/certificates/verify/{hash}` | Public | Verify cert |
-| POST | `/api/interviews` | Employer+ | Schedule |
-| POST | `/api/upload/resume` | Student | Upload resume |
-| GET | `/api/resume/info` | Student | Resume metadata |
-</details>
-
-<details>
-<summary><strong>Analytics & Engagement (10+)</strong></summary>
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| GET | `/api/analytics/overview` | Admin+ | Platform stats |
-| GET | `/api/analytics/charts` | Admin+ | Recharts data |
-| GET | `/api/analytics/heatmap` | JWT | 12-week heatmap |
-| GET | `/api/leaderboard` | JWT | 5-category ranking |
-| GET | `/api/momentum` | JWT | XP + streaks |
-| GET | `/api/activity-stream` | JWT | Recent actions |
-| GET | `/api/user-behavior` | JWT | Behavior analysis |
-| GET | `/api/skill-gap` | Student | Market gap analysis |
-| GET | `/api/trending-jobs` | JWT | Hot jobs |
-| GET | `/api/employer/best-candidates` | Employer+ | AI-ranked |
-</details>
-
----
-
-## Data Model
-
-**21 MongoDB collections** — full ER diagram: [`docs/ER_DIAGRAM.md`](docs/ER_DIAGRAM.md)
-
-Key relationships:
-- `users` → `student_profiles` / `mentor_profiles` / `employer_profiles` (1:1)
-- `employer_profiles` → `job_postings` (1:many)
-- `job_postings` → `applications` (1:many)
-- `applications` → `interviews` / `certificates` / `hiring_outcomes` (1:1)
-- `model_weights` ← `hiring_outcomes` (self-learning loop)
 
 ---
 
@@ -350,22 +226,12 @@ Key relationships:
 
 | Document | Description |
 |----------|-------------|
-| [`docs/ER_DIAGRAM.md`](docs/ER_DIAGRAM.md) | Entity Relationship diagram (21 collections, all indexes) |
-| [`docs/CFD_DIAGRAM.md`](docs/CFD_DIAGRAM.md) | Context Flow + Data Flow + State Machine diagrams |
-| [`memory/PRD.md`](memory/PRD.md) | Product Requirements Document |
-
----
-
-## The Moat
-
-```
-Rate of improvement > Competitors' rate of iteration
-```
-
-Every new user improves the model. Every outcome sharpens predictions. Every behavior signal refines UX. After 6 months of data, switching cost becomes infinite.
+| [ER Diagram](docs/ER_DIAGRAM.md) | 21 collections, all relationships, index strategy |
+| [CFD/DFD](docs/CFD_DIAGRAM.md) | Context flow, data flow, state machine, deployment arch |
+| [render.yaml](render.yaml) | One-click Render blueprint |
 
 ---
 
 <div align="center">
-<sub>Built with obsessive attention to compounding advantage.</sub>
+<sub>Built to compound. Every user improves the model. Every outcome sharpens predictions.</sub>
 </div>

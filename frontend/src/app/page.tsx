@@ -107,13 +107,13 @@ export default function LandingPage() {
             </div>
             <span className="font-bold text-lg tracking-tight">UNIFY</span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             <button onClick={toggleTheme} className="p-2 hover:bg-white/5 rounded-md transition-colors" data-testid="landing-theme-toggle">
               {darkMode ? <Sun className="w-4 h-4 text-[var(--text-muted)]" /> : <Moon className="w-4 h-4 text-[var(--text-muted)]" />}
             </button>
-            <button onClick={() => router.push('/login')} className="btn-secondary text-xs px-5 py-2.5 magnetic-btn" data-testid="nav-login-btn">Sign In</button>
-            <button onClick={() => router.push('/register')} className="btn-primary text-xs px-5 py-2.5 magnetic-btn" data-testid="nav-register-btn">
-              Get Started <ArrowRight className="inline w-3.5 h-3.5 ml-1" />
+            <button onClick={() => router.push('/login')} className="btn-secondary text-xs px-3 sm:px-5 py-2 sm:py-2.5 magnetic-btn" data-testid="nav-login-btn">Sign In</button>
+            <button onClick={() => router.push('/register')} className="btn-primary text-xs px-3 sm:px-5 py-2 sm:py-2.5 magnetic-btn" data-testid="nav-register-btn">
+              <span className="hidden sm:inline">Get Started</span><span className="sm:hidden">Start</span> <ArrowRight className="inline w-3.5 h-3.5 ml-1" />
             </button>
           </div>
         </div>
@@ -132,11 +132,11 @@ export default function LandingPage() {
                 <span className="text-[10px] font-mono text-[var(--text-secondary)] tracking-wider">INTELLIGENCE ENGINE ACTIVE</span>
               </div>
 
-              <div className="overflow-hidden mb-3"><h1 className="hero-line-1 text-[clamp(2.5rem,7vw,5.5rem)] font-black leading-[0.9] tracking-tighter">Stop wasting</h1></div>
-              <div className="overflow-hidden mb-3"><h1 className="hero-line-2 text-[clamp(2.5rem,7vw,5.5rem)] font-black leading-[0.9] tracking-tighter">applications<span style={{color:'var(--cyan)'}}>.</span></h1></div>
-              <div className="overflow-hidden mb-8"><h1 className="hero-line-3 text-[clamp(2rem,5vw,3.5rem)] font-black leading-[0.9] tracking-tighter text-[var(--cyan)] glow-text">Apply where you can win.</h1></div>
+              <div className="overflow-hidden mb-2"><h1 className="hero-line-1 text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-black leading-[0.92] tracking-tighter">Stop wasting</h1></div>
+              <div className="overflow-hidden mb-2"><h1 className="hero-line-2 text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-black leading-[0.92] tracking-tighter">applications.</h1></div>
+              <div className="overflow-hidden mb-6 sm:mb-8"><h1 className="hero-line-3 text-2xl sm:text-3xl md:text-4xl font-black leading-[1.05] tracking-tight text-[var(--cyan)] glow-text">Apply where you can win.</h1></div>
 
-              <p className="hero-sub text-lg text-[var(--text-secondary)] max-w-lg leading-relaxed mb-10">
+              <p className="hero-sub text-base sm:text-lg text-[var(--text-secondary)] max-w-lg leading-relaxed mb-8 sm:mb-10">
                 See your hiring probability <strong className="text-white">before</strong> you apply. The system learns from every outcome and gets smarter with every user.
               </p>
 
@@ -218,7 +218,8 @@ export default function LandingPage() {
           <h2 className="text-3xl sm:text-4xl font-black tracking-tighter text-center mb-12">
             Others show jobs.<br /><span className="glow-text" style={{color:'var(--cyan)'}}>UNIFY shows probability.</span>
           </h2>
-          <div className="grid grid-cols-2 gap-px rounded-lg overflow-hidden" style={{ background: 'var(--border-subtle)' }}>
+          <div className="overflow-x-auto rounded-lg">
+            <div className="min-w-[320px] grid grid-cols-2 gap-px rounded-lg overflow-hidden" style={{ background: 'var(--border-subtle)' }}>
             {[
               ['Everyone Else', 'UNIFY'],
               ['Random apply', 'Strategic apply'],
@@ -232,6 +233,7 @@ export default function LandingPage() {
                 <div className={`p-4 ${i === 0 ? 'font-bold text-xs text-[var(--cyan)]' : 'text-xs'}`} style={{ background: i === 0 ? 'var(--bg-elevated)' : 'var(--bg-surface)' }}>{row[1]}</div>
               </React.Fragment>
             ))}
+            </div>
           </div>
         </div>
       </section>
