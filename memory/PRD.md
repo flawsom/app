@@ -1,50 +1,60 @@
-# UNIFY - Adaptive Placement Intelligence Platform
+# UNIFY — PRD (Product Requirements Document)
 
-## Problem Statement
-Fix 401 (Unauthorized) errors across all API endpoints. The app is deployed at unifies.onrender.com but was getting authentication failures on every API call (/api/profile, /api/applications, /api/notifications, /api/interviews, /api/momentum, /api/upload/resume, /api/behavior/track, /api/profile/strength).
+## Original Problem
+Fix 401 Unauthorized errors, then evolve into a self-learning placement intelligence platform.
 
-## Architecture
-- **Backend:** FastAPI (Python) running on port 8001 with MongoDB
-- **Frontend:** Next.js with TypeScript, Tailwind CSS
-- **Auth:** JWT (access + refresh tokens), bcrypt password hashing
-- **Database:** MongoDB (project_unify)
-- **AI:** OpenAI GPT-5.2 via Emergent LLM key for recommendations and chatbot
+## Core Requirements
+- JWT auth with Bearer tokens + httpOnly cookies
+- 5 user roles: student, mentor, employer, placement, admin
+- Self-learning hiring probability model
+- AI-powered recommendations, interview prep, cover letters, resume analysis
+- Real-time WebSocket notifications
+- Recharts analytics dashboards
+- Light/dark mode toggle
+- WeasyPrint branded PDF certificates
 
-## Root Cause Analysis (2026-04-13)
-Three interrelated authentication issues:
-1. **CORS**: Backend only allowed `unifies.codes` origins, blocking requests from the actual deployment domain
-2. **Cookie domain**: Hardcoded to `.unifies.codes` with `secure=True, samesite=none` - cookies never set on other domains
-3. **No Bearer token flow**: Frontend relied solely on httpOnly cookies, never stored or sent the access_token as Authorization header
-
-## What's Been Implemented (2026-04-13)
-- [x] Fixed CORS to include preview/deployment domain dynamically via FRONTEND_URL env var
-- [x] Fixed cookie settings: removed hardcoded domain, set secure=False, samesite=lax
-- [x] Frontend `api.ts`: Added localStorage token storage + Bearer header injection
-- [x] Frontend `auth-context.tsx`: Updated to save token from login/register, check token before API calls
-- [x] Registered test user account
-- [x] Fixed certificate PDF 500 error for invalid IDs
+## What's Been Implemented (2026-04-15)
+- [x] Full auth system (JWT + cookies, dynamic production settings)
+- [x] 5 role dashboards with URL-driven sidebar navigation
+- [x] Self-learning model weights (adapt on outcomes)
+- [x] Decision engine (next-action, control system)
+- [x] Hiring probability with adaptive weights
+- [x] Behavioral tracking + obedience scoring
+- [x] Predictive alerts engine
+- [x] Interview Prep AI (8 questions + STAR + company brief)
+- [x] Cover Letter Generator (per job)
+- [x] Resume AI Analyzer (ATS score, keyword gaps, rewrite suggestions)
+- [x] WeasyPrint PDF certificates with UNIFY branding
+- [x] Recharts: monthly bar, status donut, skill radar
+- [x] 12-week activity heatmap
+- [x] System health monitor
+- [x] TanStack Query v5 + Zustand state management
+- [x] GSAP animations on landing page
+- [x] Light/dark mode with CSS variables
+- [x] PWA manifest
+- [x] Leaderboard (5 categories)
+- [x] Momentum/XP system with milestones
+- [x] AI Chatbot (GPT-4o)
+- [x] Resume upload + viewer modal
+- [x] CSV export
+- [x] Weekly email digest via Resend
+- [x] Deployment configs (Render Dockerfile + Vercel next.config.js)
 
 ## Testing Results
-- Auth flows: 100% pass rate
-- Backend: 88% (minor cert PDF edge case fixed)
-- Frontend: 95%
+- Backend: 93.5% (29/31 endpoints)
+- Frontend: 100%
+- Overall: 96%
 
-## User Personas
-- **Student:** Apply to jobs, view recommendations, track applications, AI chatbot
-- **Employer:** Post jobs, review applications, schedule interviews, provide feedback
-- **Mentor:** Review student applications, approve/reject
-- **Placement Officer:** Analytics, oversight, CSV exports
-- **Admin:** User management, system analytics, seed demo data
+## Backlog
+### P1
+- [ ] Redis integration (rate limiting, leaderboard cache, token blacklist)
+- [ ] MongoDB Atlas Search (semantic job search)
+- [ ] Google OAuth
+- [ ] Multi-language (i18n)
 
-## Prioritized Backlog
-### P0 - Done
-- [x] Fix authentication 401 errors
-
-### P1 - Next
-- [ ] Add more test user accounts (mentor, employer, placement)
-- [ ] Token refresh mechanism on frontend (auto-refresh before expiry)
-
-### P2 - Future
-- [ ] Production-ready cookie settings (secure=True, samesite=none for cross-origin)
-- [ ] Rate limiting fine-tuning
-- [ ] Email verification flow
+### P2
+- [ ] Auto-apply with confirmation
+- [ ] Employer bulk status actions
+- [ ] Sentry error tracking
+- [ ] GitHub Actions CI
+- [ ] A/B testing system
