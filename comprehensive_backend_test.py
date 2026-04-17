@@ -146,10 +146,10 @@ def main():
     # Test all user types from requirements
     user_credentials = [
         ("sibaprasadpanda56@gmail.com", "siba-4738", "Student"),
-        ("admin@example.com", "admin123", "Admin"),
-        ("employer@unify.com", "employer123", "Employer"),
-        ("mentor@unify.com", "mentor123", "Mentor"),
-        ("placement@unify.com", "placement123", "Placement")
+        ("admin@unifies.codes", "admin123", "Admin"),
+        ("employer@unifies.codes", "employer123", "Employer"),
+        ("mentor@unifies.codes", "mentor123", "Mentor"),
+        ("placement@unifies.codes", "placement123", "Placement")
     ]
     
     print("\n🔐 Authentication Tests")
