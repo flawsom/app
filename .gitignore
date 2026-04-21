@@ -24,6 +24,8 @@ node_modules/
 
 # Next.js
 /.next/
+.next/
+**/.next/
 /out/
 next-env.d.ts
 *.tsbuildinfo
@@ -107,6 +109,15 @@ frontend/node_modules/@next/swc-linux-x64-gnu/next-swc.linux-x64-gnu.node
 
 # Sentry source maps (uploaded to Sentry, not committed)
 .sentryclirc
+-e 
+# Environment and credential files
+.env
+.env.*
+*.env
+credentials.json
+*.pem
+*.key
+.credentials
 -e 
 # Environment and credential files
 .env
