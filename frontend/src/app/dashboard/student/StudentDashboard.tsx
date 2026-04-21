@@ -191,7 +191,7 @@ export default function StudentDashboard() {
     if (hireProbabilities[jobId]) return;
     setProbLoading(jobId);
     try {
-      const data = await apiPost<HireProbability>('/api/hiring-probability', { job_id: jobId });
+      const data = await apiPost<HireProbability>(`/api/probability/${jobId}`, {});
       setHireProbs(prev => ({ ...prev, [jobId]: data }));
     } catch {}
     setProbLoading(null);

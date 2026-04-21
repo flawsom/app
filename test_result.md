@@ -263,6 +263,20 @@ backend:
           agent: "testing"
           comment: "✅ VERIFIED: Roast profile endpoint working perfectly. POST /api/roast-profile returns all required fields: roast, score, fix, ai_provider=unify_key, quota. Rate limiting active and quota tracking functional."
 
+
+  - task: "POST /api/probability/{job_id} path-based hiring probability"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Added new path-based endpoint POST /api/probability/{job_id}. Wraps the existing _compute_hire_probability engine using live student profile + live job data. Returns {probability, factors, improvement, model_version, job_id, job_title, company, source, ai_provider='unify_probability_engine'}. Persists the prediction into probability_predictions so the self-learning weight loop can update. Requires student role. Manually smoke-tested: real job returns probability payload; invalid id → 404; no auth → 401. Sentry DSN now configured (/api/health reports sentry=true)."
+
+
 frontend:
   - task: "UNIFY branded metadata, OG tags, PWA manifest, favicon, 404 + error pages"
     implemented: true
@@ -295,7 +309,10 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "POST /api/probability/{job_id} — path-based real-time hiring probability endpoint"
+    - "Sentry backend initialization (SENTRY_DSN_BACKEND now set)"
+    - "Regression: hiring-probability, jobs listing, auth, ai-usage/me still pass"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"

@@ -1200,6 +1200,35 @@ async def hiring_probability(request: Request):
     await db.probability_predictions.update_one({"user_id": user["id"], "job_id": job_id}, {"$set": {"user_id": user["id"], "job_id": job_id, "probability": result["probability"], "factors": result["factors"], "predicted_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
     return result
 
+@app.post("/api/probability/{job_id}")
+async def probability_by_job_id(job_id: str, request: Request):
+    """Real-time hiring probability using live profile + live job data (path-based convenience route).
+
+    Returns {probability, factors, improvement, model_version, ai_provider, job_id, job_title, company, source}.
+    Persists the prediction so the self-learning loop can update weights from outcomes.
+    """
+    user = await require_role("student")(request)
+    if not job_id: raise HTTPException(400, "job_id required")
+    try: job = await db.job_postings.find_one({"_id": ObjectId(job_id)})
+    except Exception: raise HTTPException(404, "Job not found")
+    if not job: raise HTTPException(404, "Job not found")
+    profile = await db.student_profiles.find_one({"user_id": user["id"]}) or {}
+    apps_count = await db.applications.count_documents({"student_id": user["id"]})
+    job_apps = await db.applications.count_documents({"job_id": job_id})
+    result = await _compute_hire_probability(profile, job, apps_count, job_apps)
+    result["job_id"] = job_id
+    result["job_title"] = job.get("title","")
+    result["company"] = job.get("company_name","")
+    result["source"] = job.get("source","internal")
+    # Deterministic statistical model — no external AI call here, but surface provider label for UI parity
+    result["ai_provider"] = "unify_probability_engine"
+    await db.probability_predictions.update_one(
+        {"user_id": user["id"], "job_id": job_id},
+        {"$set": {"user_id": user["id"], "job_id": job_id, "probability": result["probability"], "factors": result["factors"], "predicted_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    return result
+
 @app.get("/api/next-action")
 async def next_action(request: Request):
     user = await get_current_user(request)
