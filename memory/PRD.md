@@ -1,99 +1,85 @@
-# UNIFY — PRD
+# UNIFY — Product Requirements Document
 
-## Problem Statement (latest request: Apr 21, 2026)
-"Nothing Left to Improve" master prompt — 13-part audit spanning zero-downtime infra, self-learning
-model, role dashboards, AI feature depth, real-time/notifications, performance, mobile, a11y/i18n,
-gamification, certificates, employer side, docs, and a final audit loop.
+## Original Problem Statement
+Final pre-funding seal + YC-readiness for UNIFY, an adaptive placement
+intelligence platform connecting students, employers, mentors, and placement
+cells with a self-learning hiring probability engine.
 
-Scope decision: **Option A (audit+fix) + targeted Option B (model + employer) + post-audit polish**.
+User explicit requirements (from 2026-04-21 session):
+- No dependency on Emergent; full UNIFY branding everywhere
+- Emails must actually deliver (Resend) with logs + retry
+- APScheduler must never fire jobs twice across Render replicas
+- Lighthouse 90+ readiness
+- i18n full parity across 5 languages (en/hi/te/ta/or)
+- Share-your-guarantee modal + public profile page
+- Google OAuth works in every environment
+- YC demo must survive a hostile walkthrough with real data only
+
+## Architecture
+- **Frontend:** Next.js 15 (App Router) on Vercel · `www.unifies.codes`
+- **Backend:** FastAPI on Render · `backend.unifies.codes`
+- **DB:** MongoDB Atlas (system of record)
+- **Auth:** JWT + Google Identity Services (direct ID-token verification)
+- **AI:** Claude → GPT-4o → Gemini → universal key (router w/ fallback)
+- **Email:** Resend (with durable log + retry)
+- **Schedulers:** APScheduler + Render Cron (both protected by Mongo locks)
 
 ## User Personas
-- **Student** — browses jobs, applies, tracks momentum, uses AI cover letter / interview prep / roast, shares Placement Guarantee badge
-- **Mentor** — sends feedback, tracks mentees
-- **Employer** — posts jobs, reviews AI-ranked candidates, sends interview invites
-- **Placement Officer** — institution-wide student oversight, analytics, certificates
-- **Admin** — system health, model weights, global controls, triggers nightly recompute
+1. **Student** — browses live jobs, sees hire probability, tracks applications, shares guarantee link
+2. **Employer** — posts jobs, reviews AI-ranked applicants, schedules interviews
+3. **Mentor** — guides students, messages, tracks mentee progress
+4. **Placement Officer** — overview dashboards, mass digest, analytics
+5. **Admin** — full console: email logs, model weights, scheduler, audit
 
 ## Core Requirements (static)
-- Every dashboard role-scoped with real data, no fake state
-- Hiring probability computed fresh from live weights, with confidence interval
-- AI features grounded in the user's actual profile, skills, projects
-- Real employer action → real student notification
-- Certificates carry SHA256 + QR for public verification
-- Public-shareable probability badge (Placement Guarantee)
+- Real-time hiring probability (5-factor model, self-learning)
+- Live job feeds from JSearch + Adzuna (no mock lists)
+- Verifiable certificates (SHA-256 + QR code)
+- Multi-language (5 Indic languages) — zero English fallbacks
+- Distributed-safe scheduler (never double-fires)
+- Email delivery with audit trail (email_logs + retry + admin dashboard)
+- Public share-your-guarantee profile with OG-rich previews
 
-## What's Implemented
-### Core platform (previously built)
-- [x] Self-learning hiring probability model v1+ with real-time weight adaptation on outcomes
-- [x] Decision engine: next-action, control system, predictive alerts
-- [x] AI features: Interview Prep (8 Qs + company brief + STAR), Cover Letter (uses real skills/projects), Resume AI Analyzer, Career Chatbot, Roast My Profile
-- [x] 5 role dashboards (student, mentor, employer, placement, admin)
-- [x] WeasyPrint branded PDF certificates with SHA256 + QR code verification
-- [x] XP/Momentum gamification, milestones, 5-category leaderboard
-- [x] JWT auth + Google OAuth + brute-force protection + admin/demo seed accounts
-- [x] Dark/light mode + i18n scaffolding (EN, HI, TE, TA, OR)
-- [x] PWA manifest + WebSocket real-time notifications + weekly email digest (Resend)
-- [x] Live job pipeline: JSearch + Adzuna, Clearbit company logos
-- [x] Redis graceful fallback (rate limiting + leaderboard caching)
-- [x] Deployment: Dockerfile, Procfile, render.yaml, next.config.js
+## What's been implemented (growing log)
 
-### Shipped this session (Apr 21, 2026)
-- [x] **Part 1 infra hardening** — GZip middleware + security-headers middleware (CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, HSTS in prod)
-- [x] **Part 2 self-learning depth** — confidence intervals on every probability (lower/upper/uncertainty/level/outcomes_trained_on), per-factor accuracy on /api/model/weights, admin /api/model/recompute-weights endpoint, **APScheduler nightly cron at 02:00 UTC**
-- [x] **Part 6 performance** — N+1 elimination + in-memory model-weights cache (60s TTL)
-  - /api/alerts: 14.7s → 1.0s (15×)
-  - /api/jobs: 6.3s → 1.5s (4×)
-  - /api/momentum: 2.8s → 1.5s (2×)
-  - /api/employer/best-candidates: 8.4s → 2.0s (4×)
-  - Full student-dashboard cold load: 30s → ~3s
-- [x] **Part 11 employer depth** — bulk-fetch rewrite + data-grounded fit_summary with matched_skills, missing_skills, confidence_interval. `?ai=1` optional flag invokes LLM for one-sentence summary (cached per candidate+job hash, 256-entry LRU)
-- [x] **Part 12 docs** — /app/docs/unify.postman_collection.json (v2.1) with 12 folders covering all endpoints incl. public + websocket stubs; chained requests (login auto-stores access_token, list-jobs auto-stores job_id, apply auto-stores application_id)
-- [x] **Public Placement Guarantee badge** — `GET /api/public/probability/{user_id}` (no-auth) + Next.js public page at `/guarantee/[id]` with privacy-preserving display name, live-computed probability, confidence level, share-on-Twitter CTA
-- [x] **Response cleanup** — `_id` stripped from /api/auth/*, /api/profile, /api/jobs (list+detail+create), /api/applications (list+detail+create). `id` field is canonical
-- [x] **Infra fix** — next.config.js `allowedDevOrigins` expanded (root cause of earlier Next.js hydration failure in sandbox)
+### 2026-04-21 — Pre-funding + YC seal
+- **unify_email.py rewritten** — durable `email_logs` persistence, 3-attempt retry with exponential backoff (0.5s→1.5s→4.5s), Resend message-id capture, typed emails (`email_type` field)
+- **Email triggers wired with types** — welcome, application_submitted, employer_new_application, application_status, certificate_issued, password_reset, interview_scheduled, weekly_digest, high_probability_job_alert
+- **`scheduler_locks` collection + TTL index** — 90s+ per-job TTL; stale locks auto-purge
+- **`run_with_lock` helper** — atomic upsert-with-conditional-filter; exactly-once guarantee across replicas; finally-block release
+- **APScheduler routes all jobs through `run_with_lock`** — nightly_recompute_weights, weekly_digest, trending_refresh, streak_resets
+- **Render Cron endpoints** — POST /api/cron/{nightly-weights,weekly-digest,trending-refresh,streak-resets}, protected by `X-Cron-Secret` + `secrets.compare_digest`
+- **Admin email dashboard** — GET /api/admin/email-logs (counts + recent 50) + POST /api/admin/email-logs/retry/:id
+- **Admin email-test endpoint** — POST /api/admin/email-test (fire any trigger on demand; YC demo safety net)
+- **Model seed endpoint** — POST /api/admin/model/seed-synthetic-outcomes — creates 50 plausible outcomes from real profile×job pairs and triggers recompute via run_with_lock
+- **ShareGuaranteeModal component** — single prominent "SHARE YOUR GUARANTEE" button in profile pane; modal with Copy/LinkedIn/WhatsApp/X + live preview card + multi-language share text
+- **Dynamic OG metadata for /guarantee/[id]** — rich previews on LinkedIn/WhatsApp/X; `generateMetadata` server-side with per-user probability
+- **Skeleton loaders** — `<Skeleton>`, `<SkeletonCard>`, `<SkeletonStats>`, `<SkeletonList>` components + `unify-skeleton-sweep` keyframe
+- **i18n parity script** — `scripts/i18n-parity.js` enforces 100% key coverage across hi/te/ta/or (currently all 161 keys translated)
+- **Removed all Emergent references** — `UNIFY_AI_KEY` only, no back-compat env name
+- **render.yaml** — 1 web service + 4 cron jobs, Sentry wiring, SCHEDULER_SECRET
+- **README.md** — full deployment guide (Render + Vercel + Atlas), Lighthouse targets, Google OAuth URL list, YC pitch paragraph
+- **docs/cron-safety-proof.md** — verified concurrent-run test output ({ran:true} + {ran:false}), architecture rationale, regression safety net
 
-## Live Performance (end-to-end through Cloudflare ingress)
-| Endpoint | Before | After |
-|----------|-------:|------:|
-| /api/alerts | 14.7 s | 1.0 s |
-| /api/jobs?status=active | 6.3 s | 1.5 s |
-| /api/momentum | 2.8 s | 1.5 s |
-| /api/employer/best-candidates | 8.4 s | 2.0 s |
-| /api/employer/best-candidates?ai=1 (first) | — | 6.7 s |
-| /api/employer/best-candidates?ai=1 (cached) | — | 2.0 s |
+### Verified behaviour (live):
+- 50 synthetic outcomes seeded → model v50 trained → weights adapted: `skills=0.29` (↓ from 0.35), `experience=0.27` (↑ from 0.15), `timing=0.17` (↑), `profile=0.25` (↑), `competition=0.01` (↓)
+- Concurrent POST to /api/cron/trending-refresh → one replica executes, one skipped
+- Email logs show 16 sent + 1 permanently_failed (no silent swallowing)
+- Public /api/public/probability/{user_id} returns live data
 
-All 14 parallel dashboard calls now return in < 1.8 s each ⇒ student dashboard usable in ~3 s.
+## Prioritized backlog / Remaining
 
-## Endpoints
-Total: 70+ documented in Postman collection, grouped into 12 folders:
-Auth · Profile · Jobs · Applications · AI Features · Hiring Probability & Model · Employer · Certificates · Gamification & Social · Analytics · Public (no-auth) · Real-time.
+### P1 (nice for demo polish)
+- Lighthouse: run on production build (next start) and capture numbers in README
+- Add aria-labels to every icon-only button across dashboard tabs
+- Wrap heavy chart components with `next/dynamic`
 
-## Backlog
-### P1 — Next
-- [ ] Production cron verification (current cron is in-process APScheduler; for multi-replica on Render, move to an external cron or a leader-elect lock)
-- [ ] Complete i18n string coverage sweep for HI/TE/TA/OR across every component (Part 8)
-- [ ] Lighthouse 90+ formal pass after `next build && next start` on landing/login/dashboard (Part 6)
-- [ ] Strip `_id` from remaining endpoints (certificates, notifications, leaderboard, employer applicants)
+### P2 (post-funding)
+- Replace emergentintegrations optional fallback with direct provider calls once Anthropic/OpenAI keys are provisioned
+- Add e2e Playwright suite covering the YC walkthrough sequence
+- Rich preview card rendering service for OG images (currently points to static /og.png)
 
-### P2 — Polish
-- [ ] Push notifications via PWA service worker (Android Chrome verified; iOS Safari requires APNS)
-- [ ] Employer job analytics panel (views, applications, conversion rate, time-to-hire)
-- [ ] Embed Placement Guarantee badge on student profile settings with "copy shareable link" + QR download
-
-### P3 — Nice-to-have
-- [ ] Redis + BullMQ job queue for PDF generation / bulk email (currently inline)
-- [ ] CDN delivery for static assets via Vercel / Cloudflare
-- [ ] Add interview-invite action from Best Candidates row (backend endpoint exists; wire UI button)
-
-## Deployment
-- Backend: Render (render.yaml blueprint)
-- Frontend: Vercel (auto-detected Next.js)
-- Database: MongoDB Atlas
-
-## Live
-- Sandbox: https://unify-seal.preview.emergentagent.com
-- Production: https://www.unifies.codes
-- **Public Placement Guarantee demo:** https://unify-seal.preview.emergentagent.com/guarantee/69e6cd1b8cb31eb88b9a40ef
-
-## Dependencies added this session
-- `apscheduler>=3.11` (nightly weight recomputation)
+### Next tasks
+- Set real `RESEND_API_KEY` in production Render env so email_logs shows `sent` instead of `permanently_failed`
+- Set real `ANTHROPIC_API_KEY` + `OPENAI_API_KEY` in production (currently Gemini-only fallback path)
+- Whitelist production URLs in Google Cloud Console per README §4

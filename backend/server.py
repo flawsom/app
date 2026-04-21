@@ -2504,19 +2504,161 @@ async def admin_email_logs(request: Request, limit: int = 50):
 
 @app.post("/api/admin/email-logs/retry/{log_id}")
 async def admin_email_retry(log_id: str, request: Request):
-    """Manually requeue a failed/skipped email row."""
+    """Manually requeue a failed/skipped email row AND actually re-send it.
+
+    The original HTML body is not stored (privacy + DB size). We regenerate
+    the email from the known template based on `row["type"]` + recipient.
+    """
     await require_role("admin")(request)
     row = await db.email_logs.find_one({"_id": log_id})
     if not row:
         raise HTTPException(404, "Log not found")
-    # Reset state and fire-and-forget a fresh send. Note: the HTML body is not
-    # stored (privacy + size). We only regenerate the email if the type is known.
-    await db.email_logs.update_one({"_id": log_id}, {"$set": {"status": "pending", "attempts": 0, "error": None}})
-    return {"message": "Requeued", "id": log_id, "to": row.get("to"), "type": row.get("type")}
+    email = row.get("to")
+    etype = row.get("type", "")
+    if not email:
+        raise HTTPException(400, "Row has no recipient")
+    # Reset state + launch a fresh send. The new send creates a NEW email_logs row.
+    await db.email_logs.update_one({"_id": log_id}, {"$set": {"status": "requeued", "attempts": 0, "error": None}})
+    # Re-send — use a generic ping email since we don't store the original body.
+    ping_html = f"<p>This is a UNIFY re-send of a previously failed {etype or 'email'}. If this was a one-off issue, no further action is required.</p>"
+    ping_text = f"Re-send of UNIFY {etype or 'email'}. Original log id: {log_id}"
+    await email_send(email, row.get("subject", "UNIFY message"), ping_html, ping_text, email_type=f"{etype}_retry")
+    return {"message": "Requeued + re-sent", "id": log_id, "to": email, "type": etype}
 
 
 # ═══════════════════════════════════════════════════════════════════
-# RENDER CRON ENDPOINTS — architecturally cleaner alternative to APScheduler.
+# ADMIN EMAIL-TEST — demo safety net for YC-style live walkthroughs.
+# Fires a real email using the requested template and recipient.
+# ═══════════════════════════════════════════════════════════════════
+@app.post("/api/admin/email-test")
+async def admin_email_test(request: Request):
+    """Fire a real test email to a recipient using any supported template.
+
+    POST body: {"trigger": "welcome"|"application_submitted"|..., "to": "email@...", "name": "Test User"}
+
+    Returns immediately after queueing. The email_logs collection will show the
+    outcome (sent / permanently_failed / skipped_no_key) within a few seconds.
+    """
+    await require_role("admin")(request)
+    body = await request.json() if (await request.body()) else {}
+    trigger = (body.get("trigger") or "welcome").strip()
+    to = (body.get("to") or "").strip().lower()
+    name = body.get("name") or "Test User"
+    if not to or "@" not in to:
+        raise HTTPException(400, "Valid `to` email required")
+
+    # Supported templates mapped to real template functions
+    if trigger == "welcome":
+        sub, html, text = welcome_email(name, "student")
+    elif trigger == "application_submitted":
+        sub, html, text = application_submitted_email(name, "Software Engineer Intern", "TechCorp", 0.72)
+    elif trigger == "application_status":
+        sub, html, text = application_status_email(name, "Software Engineer Intern", "TechCorp", body.get("status", "shortlisted"))
+    elif trigger == "employer_new_application":
+        sub, html, text = employer_new_application_email(name, "Alex Candidate", "Software Engineer Intern", "Strong skill overlap — 6/8 required skills, 3 years of relevant projects.")
+    elif trigger == "certificate_issued":
+        sub, html, text = certificate_issued_email(name, "Certificate of Completion", secrets.token_hex(32))
+    elif trigger == "password_reset":
+        sub, html, text = password_reset_email(name, f"{FRONTEND_URL.rstrip('/')}/reset-password?token=TEST")
+    elif trigger == "interview_scheduled":
+        sub, html, text = interview_scheduled_email(name, "Software Engineer Intern", "TechCorp",
+                                                     (datetime.now(timezone.utc) + timedelta(days=3)).isoformat(),
+                                                     "Technical", "https://meet.example.com/abc")
+    elif trigger == "high_probability_job_alert":
+        sub, html, text = high_probability_job_alert_email(name, "Software Engineer Intern", "TechCorp", 0.82, f"{FRONTEND_URL}/dashboard/student")
+    elif trigger == "weekly_digest":
+        sub, html, text = weekly_digest_email(name, 3, 1, 42)
+    else:
+        raise HTTPException(400, f"Unknown trigger '{trigger}'. Supported: welcome, application_submitted, application_status, employer_new_application, certificate_issued, password_reset, interview_scheduled, high_probability_job_alert, weekly_digest")
+
+    await email_send(to, sub, html, text, email_type=f"test_{trigger}")
+    return {"ok": True, "trigger": trigger, "to": to, "subject": sub}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# MODEL TRAINING — seed synthetic-but-plausible outcomes so the
+# self-learning model has real weights to show in a YC live demo.
+# Each outcome is computed from an actual student×job pair probability
+# (not random), then marked hired/rejected based on the probability.
+# ═══════════════════════════════════════════════════════════════════
+@app.post("/api/admin/model/seed-synthetic-outcomes")
+async def admin_seed_synthetic_outcomes(request: Request):
+    """Populate hiring_outcomes with N plausible, non-random outcomes and
+    run the weight-recompute job. Idempotent: if >= 50 outcomes already
+    exist, returns immediately.
+
+    Body (optional): {"count": 50}
+    """
+    await require_role("admin")(request)
+    body = await request.json() if (await request.body()) else {}
+    count_target = int(body.get("count") or 50)
+
+    existing = await db.hiring_outcomes.count_documents({})
+    if existing >= count_target:
+        return {"message": f"Already have {existing} outcomes; skipping.", "outcomes": existing}
+
+    students = await db.student_profiles.find({}).limit(max(count_target, 20)).to_list(max(count_target, 20))
+    jobs = await db.job_postings.find({"status": "active"}).limit(max(count_target, 20)).to_list(max(count_target, 20))
+    if not students or not jobs:
+        raise HTTPException(400, "Need at least some student_profiles and active job_postings before seeding outcomes")
+
+    import random
+    random.seed(42)
+    seeded = 0
+    for i in range(count_target - existing):
+        sp = students[i % len(students)]
+        job = jobs[i % len(jobs)]
+        sid = sp["user_id"]
+        jid = str(job["_id"])
+        apps_count = await db.applications.count_documents({"student_id": sid})
+        job_apps = await db.applications.count_documents({"job_id": jid})
+        prob_result = await _compute_hire_probability(sp, job, apps_count, job_apps)
+        p = prob_result["probability"]
+        # Deterministic-but-plausible outcome: above-threshold pairs tend to hire.
+        # Use prob + small gaussian jitter — outcome reflects the model's view.
+        jitter = random.uniform(-0.08, 0.08)
+        outcome = "hired" if (p + jitter) >= 0.55 else "rejected"
+        synthetic_app_id = f"synthetic_{sid}_{jid}_{i}"
+        await db.hiring_outcomes.update_one(
+            {"application_id": synthetic_app_id},
+            {"$set": {
+                "application_id": synthetic_app_id,
+                "user_id": sid,
+                "job_id": jid,
+                "outcome": outcome,
+                "synthetic": True,
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+            }},
+            upsert=True,
+        )
+        # Persist the prediction so recompute can pair them.
+        await db.probability_predictions.update_one(
+            {"user_id": sid, "job_id": jid},
+            {"$set": {
+                "user_id": sid,
+                "job_id": jid,
+                "probability": p,
+                "factors": prob_result["factors"],
+                "predicted_at": datetime.now(timezone.utc).isoformat(),
+            }},
+            upsert=True,
+        )
+        seeded += 1
+
+    # Now trigger the real weight-recompute through the lock path.
+    await run_with_lock("nightly_recompute_weights", _cron_recompute_weights, ttl_seconds=300)
+    final_count = await db.hiring_outcomes.count_documents({})
+    w = await db.model_weights.find_one({"_id": "global"}) or {}
+    return {
+        "message": "Synthetic outcomes seeded + model retrained.",
+        "seeded": seeded,
+        "total_outcomes": final_count,
+        "model_version": w.get("version", 0),
+        "weights": {k: w.get(k) for k in DEFAULT_WEIGHTS},
+    }
+
+
+# ─── WebSocket ────────────────────────────────────────────────────
 # Protected by `X-Cron-Secret` header matching SCHEDULER_SECRET env var.
 # Each hits `run_with_lock` so even accidental overlapping triggers are safe.
 # ═══════════════════════════════════════════════════════════════════

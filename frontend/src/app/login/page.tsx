@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { Eye, EyeOff, ArrowLeft, Zap } from 'lucide-react';
 import { GoogleSignInButton } from '@/components/GoogleSignInButton';
+import { useI18n } from '@/i18n';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -14,6 +15,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const { login, user, setUserDirect } = useAuth();
   const router = useRouter();
+  const { t } = useI18n();
 
   const setUserDirectFromGoogle = (data: any) => {
     if (data) setUserDirect(data);
