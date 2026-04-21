@@ -1,0 +1,252 @@
+{
+  "info": {
+    "_postman_id": "c5f8c2d1-9e21-4a3b-b8a6-c17c6be4b3f4",
+    "name": "UNIFY API",
+    "description": "Complete UNIFY API collection — auth, jobs, applications, AI features, hiring probability, model weights, employer, analytics, certificates, public endpoints.\n\nSet collection variables:\n- `base_url` = https://d05df258-794d-40a2-aa7d-572976d7c22f.preview.emergentagent.com (sandbox) OR https://www.unifies.codes (prod)\n- `student_email`, `student_password`\n- `employer_email`, `employer_password`\n- `admin_email`, `admin_password`\n\nLog in first — the login request stores `access_token` automatically.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "https://d05df258-794d-40a2-aa7d-572976d7c22f.preview.emergentagent.com" },
+    { "key": "student_email", "value": "student@unifies.codes" },
+    { "key": "student_password", "value": "student-demo-2026" },
+    { "key": "employer_email", "value": "employer@unifies.codes" },
+    { "key": "employer_password", "value": "employer-demo-2026" },
+    { "key": "admin_email", "value": "admin@unifies.codes" },
+    { "key": "admin_password", "value": "siba-4738" },
+    { "key": "access_token", "value": "" },
+    { "key": "job_id", "value": "" },
+    { "key": "application_id", "value": "" },
+    { "key": "user_id", "value": "" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{access_token}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "Health & Infra",
+      "item": [
+        { "name": "Health", "request": { "method": "GET", "url": "{{base_url}}/api/health", "auth": { "type": "noauth" } } }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login (student)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "const j = pm.response.json();",
+            "pm.collectionVariables.set('access_token', j.access_token || '');",
+            "pm.collectionVariables.set('user_id', j.id || '');",
+            "pm.test('200 OK + token', () => pm.response.to.have.status(200) && pm.expect(j.access_token).to.be.a('string'));"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "auth": { "type": "noauth" },
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/auth/login",
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{student_email}}\",\n  \"password\": \"{{student_password}}\"\n}" }
+          }
+        },
+        {
+          "name": "Login (employer)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "const j = pm.response.json();",
+            "pm.collectionVariables.set('access_token', j.access_token || '');"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "auth": { "type": "noauth" },
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/auth/login",
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{employer_email}}\",\n  \"password\": \"{{employer_password}}\"\n}" }
+          }
+        },
+        {
+          "name": "Login (admin)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "const j = pm.response.json();",
+            "pm.collectionVariables.set('access_token', j.access_token || '');"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "auth": { "type": "noauth" },
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/auth/login",
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{admin_email}}\",\n  \"password\": \"{{admin_password}}\"\n}" }
+          }
+        },
+        { "name": "Current user (me)",   "request": { "method": "GET",  "url": "{{base_url}}/api/auth/me" } },
+        { "name": "Logout",              "request": { "method": "POST", "url": "{{base_url}}/api/auth/logout" } },
+        { "name": "Register",            "request": { "method": "POST", "url": "{{base_url}}/api/auth/register",
+          "auth": { "type": "noauth" },
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{\n  \"email\": \"new.user@example.com\",\n  \"password\": \"P@ssword-2026\",\n  \"name\": \"New User\",\n  \"role\": \"student\"\n}" } } },
+        { "name": "Google OAuth verify", "request": { "method": "POST", "url": "{{base_url}}/api/auth/google/verify",
+          "auth": { "type": "noauth" },
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{\n  \"credential\": \"<google-id-token-from-GSI>\"\n}" } } },
+        { "name": "Forgot password",     "request": { "method": "POST", "url": "{{base_url}}/api/auth/forgot-password",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{\"email\":\"student@unifies.codes\"}" } } },
+        { "name": "Reset password",      "request": { "method": "POST", "url": "{{base_url}}/api/auth/reset-password",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{\"token\":\"<token>\",\"new_password\":\"NewPass-2026\"}" } } }
+      ]
+    },
+    {
+      "name": "Profile",
+      "item": [
+        { "name": "Get profile",      "request": { "method": "GET",  "url": "{{base_url}}/api/profile" } },
+        { "name": "Update profile",   "request": { "method": "PUT",  "url": "{{base_url}}/api/profile",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{\n  \"first_name\":\"Demo\",\n  \"last_name\":\"Student\",\n  \"department\":\"Computer Science\",\n  \"semester\":6,\n  \"cgpa\":8.5,\n  \"skills\":[\"python\",\"react\",\"node\"],\n  \"bio\":\"4th-year CS student, love distributed systems.\",\n  \"linkedin_url\":\"https://linkedin.com/in/demo\",\n  \"phone\":\"+91-90000-00000\"\n}" } } },
+        { "name": "Profile strength", "request": { "method": "GET",  "url": "{{base_url}}/api/profile/strength" } },
+        { "name": "Upload resume",    "request": { "method": "POST", "url": "{{base_url}}/api/upload/resume",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{\n  \"file_name\":\"resume.pdf\",\n  \"file_data\":\"data:application/pdf;base64,JVBERi0x...\"\n}" } } }
+      ]
+    },
+    {
+      "name": "Jobs",
+      "item": [
+        { "name": "List jobs (active)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "const j = pm.response.json();",
+            "if (j.jobs && j.jobs[0]) pm.collectionVariables.set('job_id', j.jobs[0].id);"
+          ]}}],
+          "request": { "method": "GET", "url": "{{base_url}}/api/jobs?status=active" } },
+        { "name": "Get job",          "request": { "method": "GET", "url": "{{base_url}}/api/jobs/{{job_id}}" } },
+        { "name": "Create job (employer)",  "request": { "method": "POST", "url": "{{base_url}}/api/jobs",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{\n  \"title\":\"Backend Engineer\",\n  \"description\":\"Join our infra team\",\n  \"required_skills\":[\"python\",\"fastapi\",\"mongodb\"],\n  \"location\":\"Bangalore\",\n  \"job_type\":\"full_time\",\n  \"is_remote\":false,\n  \"salary_range\":\"8-15 LPA\"\n}" } } },
+        { "name": "Update job",        "request": { "method": "PUT",  "url": "{{base_url}}/api/jobs/{{job_id}}",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{\"status\":\"closed\"}" } } },
+        { "name": "Sync live jobs",    "request": { "method": "POST", "url": "{{base_url}}/api/jobs/sync-live",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{\"queries\":[\"software intern\",\"data analyst\"],\"location\":\"India\"}" } } },
+        { "name": "Trending jobs",     "request": { "method": "GET",  "url": "{{base_url}}/api/trending-jobs" } }
+      ]
+    },
+    {
+      "name": "Applications",
+      "item": [
+        { "name": "Apply to job",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "const j = pm.response.json();",
+            "if (j.id) pm.collectionVariables.set('application_id', j.id);"
+          ]}}],
+          "request": { "method": "POST", "url": "{{base_url}}/api/applications",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"job_id\":\"{{job_id}}\",\n  \"cover_letter\":\"I'm a strong fit because…\"\n}" } } },
+        { "name": "List applications","request": { "method": "GET", "url": "{{base_url}}/api/applications" } },
+        { "name": "Get application", "request": { "method": "GET", "url": "{{base_url}}/api/applications/{{application_id}}" } },
+        { "name": "Update status (employer/mentor)", "request": { "method": "PUT", "url": "{{base_url}}/api/applications/{{application_id}}",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{\"status\":\"interview_scheduled\"}" } } },
+        { "name": "Record outcome (self-learning trigger)", "request": { "method": "POST", "url": "{{base_url}}/api/applications/{{application_id}}/outcome",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{\"outcome\":\"hired\"}" } } }
+      ]
+    },
+    {
+      "name": "AI Features",
+      "item": [
+        { "name": "Cover letter",      "request": { "method": "POST", "url": "{{base_url}}/api/cover-letter",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{\"job_id\":\"{{job_id}}\"}" } } },
+        { "name": "Interview prep",    "request": { "method": "POST", "url": "{{base_url}}/api/interview-prep",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{\"job_title\":\"Software Engineer\",\"company\":\"Google\"}" } } },
+        { "name": "Chatbot",           "request": { "method": "POST", "url": "{{base_url}}/api/chatbot",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{\"message\":\"What should I focus on today?\"}" } } },
+        { "name": "Roast my profile", "request": { "method": "POST", "url": "{{base_url}}/api/roast-profile",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{}" } } },
+        { "name": "Resume analyzer",  "request": { "method": "POST", "url": "{{base_url}}/api/resume-analyzer",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{\"job_id\":\"{{job_id}}\"}" } } },
+        { "name": "Recommendations",          "request": { "method": "GET",  "url": "{{base_url}}/api/recommendations" } },
+        { "name": "Regenerate recommendations","request": { "method": "POST", "url": "{{base_url}}/api/recommendations/generate",
+          "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{}" } } },
+        { "name": "Skill gap",                "request": { "method": "GET",  "url": "{{base_url}}/api/skill-gap" } }
+      ]
+    },
+    {
+      "name": "Hiring Probability & Model",
+      "item": [
+        { "name": "Probability (POST /probability/{job_id})",
+          "request": { "method": "POST", "url": "{{base_url}}/api/probability/{{job_id}}" } },
+        { "name": "Probability (POST /hiring-probability)",
+          "request": { "method": "POST", "url": "{{base_url}}/api/hiring-probability",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"job_id\":\"{{job_id}}\"}" } } },
+        { "name": "Model weights + per-factor accuracy", "request": { "method": "GET",  "url": "{{base_url}}/api/model/weights" } },
+        { "name": "Recompute weights (admin)",            "request": { "method": "POST", "url": "{{base_url}}/api/model/recompute-weights" } },
+        { "name": "Alerts (predictive)",                  "request": { "method": "GET",  "url": "{{base_url}}/api/alerts" } },
+        { "name": "Next action",                          "request": { "method": "GET",  "url": "{{base_url}}/api/next-action" } },
+        { "name": "Control system",                       "request": { "method": "GET",  "url": "{{base_url}}/api/control" } },
+        { "name": "User behavior",                        "request": { "method": "GET",  "url": "{{base_url}}/api/user-behavior" } }
+      ]
+    },
+    {
+      "name": "Employer",
+      "item": [
+        { "name": "Best candidates (rules-based)", "request": { "method": "GET", "url": "{{base_url}}/api/employer/best-candidates" } },
+        { "name": "Best candidates (AI fit_summary)", "request": { "method": "GET", "url": "{{base_url}}/api/employer/best-candidates?ai=1" } },
+        { "name": "Best candidates for job",        "request": { "method": "GET", "url": "{{base_url}}/api/employer/best-candidates?job_id={{job_id}}&ai=1" } }
+      ]
+    },
+    {
+      "name": "Certificates",
+      "item": [
+        { "name": "List certificates",   "request": { "method": "GET",  "url": "{{base_url}}/api/certificates" } },
+        { "name": "Issue certificate",   "request": { "method": "POST", "url": "{{base_url}}/api/certificates/issue",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{\"student_id\":\"{{user_id}}\",\"achievement\":\"Placed at TechCorp\"}" } } },
+        { "name": "Download PDF",        "request": { "method": "GET",  "url": "{{base_url}}/api/certificates/{{application_id}}/pdf" } },
+        { "name": "Verify (public)",     "request": { "method": "GET",  "url": "{{base_url}}/api/certificates/verify/<hash>", "auth": { "type": "noauth" } } }
+      ]
+    },
+    {
+      "name": "Gamification & Social",
+      "item": [
+        { "name": "Momentum",        "request": { "method": "GET", "url": "{{base_url}}/api/momentum" } },
+        { "name": "Leaderboard",     "request": { "method": "GET", "url": "{{base_url}}/api/leaderboard?category=xp" } },
+        { "name": "Activity stream", "request": { "method": "GET", "url": "{{base_url}}/api/activity-stream" } },
+        { "name": "Notifications",   "request": { "method": "GET", "url": "{{base_url}}/api/notifications" } },
+        { "name": "Mark notification read", "request": { "method": "POST", "url": "{{base_url}}/api/notifications/<id>/read" } }
+      ]
+    },
+    {
+      "name": "Analytics (admin/placement)",
+      "item": [
+        { "name": "Overview",          "request": { "method": "GET", "url": "{{base_url}}/api/analytics/overview" } },
+        { "name": "Placements",        "request": { "method": "GET", "url": "{{base_url}}/api/analytics/placements" } },
+        { "name": "System health",     "request": { "method": "GET", "url": "{{base_url}}/api/system-health" } },
+        { "name": "Digest preview",    "request": { "method": "GET", "url": "{{base_url}}/api/digest/preview" } },
+        { "name": "Seed demo data",    "request": { "method": "POST", "url": "{{base_url}}/api/seed/demo" } }
+      ]
+    },
+    {
+      "name": "Public (no-auth)",
+      "item": [
+        { "name": "Placement Guarantee Badge",
+          "request": { "method": "GET", "auth": { "type": "noauth" }, "url": "{{base_url}}/api/public/probability/{{user_id}}" } },
+        { "name": "Certificate verify (hash)",
+          "request": { "method": "GET", "auth": { "type": "noauth" }, "url": "{{base_url}}/api/certificates/verify/<hash>" } }
+      ]
+    },
+    {
+      "name": "Real-time",
+      "item": [
+        { "name": "WebSocket (open in a WS client)",
+          "request": { "method": "GET",
+            "description": "Upgrade to WebSocket at: `{{base_url}}/api/ws/{{user_id}}` — use wscat / Postman WS interface.\n\nEmits: job_match, application_status, notification, leaderboard_update.",
+            "url": "{{base_url}}/api/ws/{{user_id}}" } }
+      ]
+    }
+  ]
+}

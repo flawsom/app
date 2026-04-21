@@ -170,7 +170,7 @@ def create_refresh_token(uid: str) -> str:
     return jwt.encode({"sub": uid, "exp": datetime.now(timezone.utc) + timedelta(days=7), "type": "refresh"}, JWT_SECRET, algorithm=JWT_ALGORITHM)
 def clean_user(u):
     if not u: return None
-    u["_id"] = str(u["_id"]); u["id"] = u["_id"]; u.pop("password_hash", None); return u
+    u["id"] = str(u["_id"]); u.pop("_id", None); u.pop("password_hash", None); return u
 
 IS_PRODUCTION = "unifies.codes" in FRONTEND_URL
 COOKIE_KW = {"httponly": True, "secure": IS_PRODUCTION, "samesite": "none" if IS_PRODUCTION else "lax", "path": "/"}
@@ -336,12 +336,64 @@ async def lifespan(app):
         await seed_database()
     except Exception as e:  # noqa: BLE001
         logger.warning("seed_failed", extra={"error": str(e)[:200]})
+    # Nightly cron: recompute global model weights from all outcomes at 02:00 UTC.
+    scheduler = None
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        scheduler = AsyncIOScheduler(timezone="UTC")
+        scheduler.add_job(_cron_recompute_weights, "cron", hour=2, minute=0, id="nightly_recompute_weights")
+        scheduler.start()
+        logger.info("scheduler_started", extra={"jobs": ["nightly_recompute_weights@02:00 UTC"]})
+    except Exception as e:  # noqa: BLE001
+        logger.warning("scheduler_start_failed", extra={"error": str(e)[:200]})
     logger.info("startup_complete", extra={
         "ai_providers": ai_providers_status(),
         "integrations": integrations_status(),
     })
+    app.state.scheduler = scheduler
     yield
+    if scheduler is not None:
+        try:
+            scheduler.shutdown(wait=False)
+        except Exception:
+            pass
     logger.info("shutdown")
+
+
+async def _cron_recompute_weights():
+    """Cron-invoked version of /api/model/recompute-weights. No auth; internal job."""
+    try:
+        outcomes = await db.hiring_outcomes.find({}).to_list(5000)
+        if not outcomes:
+            logger.info("cron_recompute_skipped", extra={"reason": "no_outcomes"})
+            return
+        scores = {k: 0.0 for k in DEFAULT_WEIGHTS}
+        n_valid = 0
+        for o in outcomes:
+            pred = await db.probability_predictions.find_one({"user_id": o["user_id"], "job_id": o["job_id"]})
+            if not pred: continue
+            factors = pred.get("factors", {}) or {}
+            y = 1.0 if o.get("outcome") == "hired" else 0.0
+            for k in DEFAULT_WEIGHTS:
+                v = float(factors.get(k, 0.0))
+                scores[k] += (v - 0.5) * (y - 0.5)
+            n_valid += 1
+        if n_valid == 0:
+            logger.info("cron_recompute_skipped", extra={"reason": "no_matching_predictions"})
+            return
+        shifted = {k: max(0.0, scores[k] / n_valid + DEFAULT_WEIGHTS[k]) for k in DEFAULT_WEIGHTS}
+        total = sum(shifted.values()) or 1.0
+        new_weights = {k: round(v / total, 4) for k, v in shifted.items()}
+        now = datetime.now(timezone.utc).isoformat()
+        await db.model_weights.update_one(
+            {"_id": "global"},
+            {"$set": {**new_weights, "outcomes_processed": n_valid, "version": n_valid, "updated_at": now, "recomputed_at": now, "recomputed_by": "cron"}},
+            upsert=True,
+        )
+        _invalidate_mw_cache()
+        logger.info("cron_recompute_done", extra={"outcomes": n_valid, "weights": new_weights})
+    except Exception as e:  # noqa: BLE001
+        logger.warning("cron_recompute_failed", extra={"error": str(e)[:300]})
 
 app = FastAPI(title="UNIFY API", version=APP_VERSION, lifespan=lifespan)
 
@@ -669,7 +721,8 @@ async def get_profile(request: Request):
     if user["role"] == "student": profile = await db.student_profiles.find_one({"user_id": user["id"]})
     elif user["role"] == "mentor": profile = await db.mentor_profiles.find_one({"user_id": user["id"]})
     elif user["role"] == "employer": profile = await db.employer_profiles.find_one({"user_id": user["id"]})
-    if profile: profile["_id"] = str(profile["_id"]); profile["id"] = profile["_id"]
+    if profile:
+        profile["id"] = str(profile["_id"]); profile.pop("_id", None)
     return {"user": user, "profile": profile}
 
 @app.put("/api/profile")
@@ -745,7 +798,7 @@ async def list_jobs(request: Request, status: Optional[str] = None, job_type: Op
         ]).to_list(len(job_ids))
         counts_map = {x["_id"]: x["c"] for x in agg}
     for j in jobs:
-        j["_id"] = str(j["_id"]); j["id"] = j["_id"]
+        j["id"] = str(j["_id"]); j.pop("_id", None)
         j["application_count"] = counts_map.get(j["id"], 0)
         if not j.get("company_logo") and j.get("company_name"):
             j["company_logo"] = company_logo_url(j["company_name"])
@@ -759,14 +812,14 @@ async def create_job(req: JobCreate, request: Request):
     doc["company_name"] = emp["company_name"] if emp else user.get("name", "Unknown")
     doc["created_at"] = datetime.now(timezone.utc).isoformat(); doc["updated_at"] = doc["created_at"]
     if not doc.get("application_deadline"): doc["application_deadline"] = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
-    r = await db.job_postings.insert_one(doc); doc["_id"] = str(r.inserted_id); doc["id"] = doc["_id"]
+    r = await db.job_postings.insert_one(doc); doc["id"] = str(r.inserted_id); doc.pop("_id", None)
     return doc
 
 @app.get("/api/jobs/{job_id}")
 async def get_job(job_id: str):
     job = await db.job_postings.find_one({"_id": ObjectId(job_id)})
     if not job: raise HTTPException(404, "Job not found")
-    job["_id"] = str(job["_id"]); job["id"] = job["_id"]; return job
+    job["id"] = str(job["_id"]); job.pop("_id", None); return job
 
 # ─── Application Routes ──────────────────────────────────────────
 @app.post("/api/applications")
@@ -780,7 +833,7 @@ async def create_application(req: ApplicationCreate, request: Request):
     doc = {"student_id": user["id"], "student_name": user.get("name",""), "job_id": req.job_id, "job_title": job.get("title",""),
            "company_name": job.get("company_name",""), "cover_letter": req.cover_letter, "status": "submitted",
            "mentor_approval_status": "pending", "mentor_id": mentor_id, "matching_score": 0, "applied_at": now, "updated_at": now}
-    r = await db.applications.insert_one(doc); doc["_id"] = str(r.inserted_id); doc["id"] = doc["_id"]
+    r = await db.applications.insert_one(doc); doc["id"] = str(r.inserted_id); doc.pop("_id", None)
     if mentor_id: await create_notification(mentor_id, "New Application", f"{user['name']} applied to {job['title']}", "info")
     if job.get("employer_user_id"): await create_notification(job["employer_user_id"], "New Application", f"Application for {job['title']}", "info")
     await audit_log(user["id"], "apply", {"job_id": req.job_id})
@@ -806,7 +859,7 @@ async def list_applications(request: Request, status: Optional[str] = None, page
     if status: query["status"] = status
     total = await db.applications.count_documents(query)
     apps = await db.applications.find(query).sort("applied_at", -1).skip((page-1)*limit).limit(limit).to_list(limit)
-    for a in apps: a["_id"] = str(a["_id"]); a["id"] = a["_id"]
+    for a in apps: a["id"] = str(a["_id"]); a.pop("_id", None)
     return {"applications": apps, "total": total, "page": page, "limit": limit}
 
 @app.get("/api/applications/{app_id}")
@@ -814,7 +867,7 @@ async def get_application(app_id: str, request: Request):
     await get_current_user(request)
     doc = await db.applications.find_one({"_id": ObjectId(app_id)})
     if not doc: raise HTTPException(404, "Application not found")
-    doc["_id"] = str(doc["_id"]); doc["id"] = doc["_id"]; return doc
+    doc["id"] = str(doc["_id"]); doc.pop("_id", None); return doc
 
 @app.put("/api/applications/{app_id}/status")
 async def update_application_status(app_id: str, request: Request):
@@ -940,6 +993,75 @@ async def verify_certificate(cert_hash: str):
     cert["_id"] = str(cert["_id"]); cert["id"] = cert["_id"]
     student = await db.users.find_one({"_id": ObjectId(cert["student_id"])}, {"password_hash": 0})
     return {"verified": True, "certificate": cert, "student_name": student["name"] if student else "Unknown"}
+
+
+# ─── Public Placement Guarantee Badge ─────────────────────────────
+# Public, no-auth endpoint used by the shareable verify page.
+# Returns a minimal, sanitised view of a student's UNIFY score that can be embedded anywhere.
+
+@app.get("/api/public/probability/{user_id}")
+async def public_probability_badge(user_id: str):
+    """Public Placement Guarantee badge data. Leaks only first-name initial + avg probability + confidence."""
+    try:
+        uid = ObjectId(user_id)
+    except Exception:
+        raise HTTPException(404, "User not found")
+    u = await db.users.find_one({"_id": uid, "role": "student"}, {"password_hash": 0})
+    if not u:
+        raise HTTPException(404, "User not found")
+    sid = str(u["_id"])
+    profile = await db.student_profiles.find_one({"user_id": sid}) or {}
+    # Fetch a sample of recent active jobs and average probability across them for a representative score.
+    jobs = await db.job_postings.find({"status": "active"}).sort("created_at", -1).limit(5).to_list(5)
+    if not jobs:
+        return {
+            "verified": True,
+            "user_id": sid,
+            "display_name": _public_display_name(u.get("name", ""), profile),
+            "probability": 0.0, "confidence_level": "low",
+            "applications": 0, "certificates": 0,
+            "message": "No active jobs to score against yet",
+            "issued_at": datetime.now(timezone.utc).isoformat(),
+        }
+    apps_count = await db.applications.count_documents({"student_id": sid})
+    probs = []
+    ci_levels = []
+    for j in jobs:
+        ja = await db.applications.count_documents({"job_id": str(j["_id"])})
+        p = await _compute_hire_probability(profile, j, apps_count, ja)
+        probs.append(p["probability"])
+        ci_levels.append((p.get("confidence_interval") or {}).get("level", "low"))
+    avg = round(sum(probs) / len(probs), 2)
+    # Aggregate confidence: "high" only if all samples are high, else majority wins.
+    level = max(set(ci_levels), key=ci_levels.count) if ci_levels else "low"
+    certificates = await db.certificates.count_documents({"student_id": sid})
+    return {
+        "verified": True,
+        "user_id": sid,
+        "display_name": _public_display_name(u.get("name", ""), profile),
+        "probability": avg,
+        "confidence_level": level,
+        "applications": apps_count,
+        "certificates": certificates,
+        "skills_count": len(profile.get("skills") or []),
+        "department": profile.get("department", ""),
+        "message": f"UNIFY {int(avg*100)}% hiring probability · {level} confidence",
+        "issued_at": datetime.now(timezone.utc).isoformat(),
+        "share_url": f"/verify/{sid}",
+    }
+
+
+def _public_display_name(full_name: str, profile: dict) -> str:
+    """Privacy-preserving display: 'First L.' rather than full name."""
+    first = (profile.get("first_name") or "").strip()
+    last = (profile.get("last_name") or "").strip()
+    if first:
+        return f"{first} {last[:1]}.".strip()
+    parts = (full_name or "").strip().split()
+    if not parts: return "UNIFY Student"
+    return f"{parts[0]} {parts[-1][:1]}." if len(parts) > 1 else parts[0]
+
+
 
 # Certificate PDF handled by WeasyPrint version below
 
@@ -1184,6 +1306,45 @@ async def chatbot(request: Request):
 DEFAULT_WEIGHTS = {"skills": 0.35, "experience": 0.15, "competition": 0.20, "profile": 0.15, "timing": 0.15}
 LEARNING_RATE = 0.02
 
+
+# In-process cache for AI-generated fit summaries (per candidate+job hash).
+# Keeps employer best-candidates fast even when `?ai=1` is used; LLM called once per pair.
+_FIT_CACHE: dict = {}
+_FIT_CACHE_MAX = 256
+
+async def _ai_fit_summary(candidate_name: str, candidate_skills: list, candidate_profile: dict, job: dict, prob: float, matched: list, missing: list) -> str:
+    """Generate a 1-sentence fit summary using LLM. Falls back to empty string on any failure."""
+    key = f"{candidate_name}|{str(job.get('_id',''))}|{round(prob,2)}"
+    cached = _FIT_CACHE.get(key)
+    if cached:
+        return cached
+    try:
+        system = (
+            "You are a senior recruiter. Write ONE crisp sentence (≤22 words) explaining why "
+            "this candidate is a fit for this job. Reference concrete skills or gaps. No fluff, "
+            "no 'I think', no filler. No trailing period lists."
+        )
+        prompt = (
+            f"Candidate: {candidate_name}. Department: {candidate_profile.get('department','unknown')}. "
+            f"CGPA: {candidate_profile.get('cgpa','n/a')}. Skills: {', '.join(candidate_skills[:8]) or 'none'}. "
+            f"Job: {job.get('title','')} at {job.get('company_name','')}. "
+            f"Required: {', '.join((job.get('required_skills') or [])[:8]) or 'not specified'}. "
+            f"Matched skills: {', '.join(matched) or 'none'}. Missing: {', '.join(missing) or 'none'}. "
+            f"UNIFY hire probability: {int(prob*100)}%."
+        )
+        res = await ai_generate(prompt=prompt, system=system, max_tokens=80, temperature=0.4, session_id="fit_summary")
+        text = (res.get("text") or "").strip().strip('"').strip()
+        # Trim to first sentence and strip newlines
+        text = text.replace("\n", " ").split(".")[0].strip()
+        if text and 8 <= len(text) <= 220:
+            if len(_FIT_CACHE) >= _FIT_CACHE_MAX:
+                _FIT_CACHE.pop(next(iter(_FIT_CACHE)))
+            _FIT_CACHE[key] = text
+            return text
+    except Exception as e:  # noqa: BLE001
+        logger.warning("ai_fit_summary_failed", extra={"error": str(e)[:200]})
+    return ""
+
 # In-process cache for model weights doc. Refreshed every 60s to keep hire-probability calls O(1).
 _MW_CACHE: dict = {"doc": None, "expires_at": 0.0}
 _MW_TTL_SEC = 60.0
@@ -1361,7 +1522,7 @@ async def control_system(request: Request):
             "weekly": {"target": wt, "done": wd, "remaining": max(0, wt-wd)}}
 
 @app.get("/api/employer/best-candidates")
-async def employer_best_candidates(request: Request, job_id: Optional[str] = None):
+async def employer_best_candidates(request: Request, job_id: Optional[str] = None, ai: int = 0):
     user = await require_role("employer", "placement", "admin")(request)
     emp = await db.employer_profiles.find_one({"user_id": user["id"]}); emp_jobs = []
     if emp: emp_jobs = await db.job_postings.find({"employer_id": str(emp["_id"])}).to_list(100)
@@ -1433,6 +1594,12 @@ async def employer_best_candidates(request: Request, job_id: Optional[str] = Non
         if not reasons:
             reasons.append(f"{int(prob['probability']*100)}% baseline match")
         fit_summary = " · ".join(reasons[:3])
+        ai_summary = ""
+        if ai and matched is not None:  # LLM-generated, cached per (candidate, job, prob)
+            ai_summary = await _ai_fit_summary(
+                su.get("name",""), list(prof.get("skills",[])), prof, job,
+                prob["probability"], matched, sorted(list(js - ss))[:4],
+            )
         candidates.append({
             "user_id": sid,
             "name": su.get("name",""),
@@ -1444,6 +1611,7 @@ async def employer_best_candidates(request: Request, job_id: Optional[str] = Non
             "factors": prob["factors"],
             "reason": fit_summary,
             "fit_summary": fit_summary,
+            "ai_summary": ai_summary or fit_summary,
             "matched_skills": matched,
             "missing_skills": sorted(list(js - ss))[:4],
             "application_id": str(ad["_id"]),
