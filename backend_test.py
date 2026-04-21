@@ -17,7 +17,7 @@ import time
 from typing import Dict, Any, Optional
 
 # Backend URL from frontend/.env
-BASE_URL = "https://hiring-engine-dev.preview.emergentagent.com/api"
+BASE_URL = "https://unify-complete.preview.emergentagent.com/api"
 
 # Test credentials from /app/memory/test_credentials.md
 ADMIN_CREDS = {"email": "admin@unifies.codes", "password": "siba-4738"}
