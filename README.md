@@ -2,236 +2,255 @@
 
 # UNIFY
 
-### Stop Wasting Applications. Apply Where You Can Win.
+**Apply where you can win.**
 
-[![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![Next.js](https://img.shields.io/badge/Next.js_14-000?style=flat-square&logo=nextdotjs)](https://nextjs.org)
-[![MongoDB](https://img.shields.io/badge/MongoDB_Atlas-47A248?style=flat-square&logo=mongodb&logoColor=white)](https://mongodb.com)
-[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://typescriptlang.org)
-[![Recharts](https://img.shields.io/badge/Recharts-FF6384?style=flat-square)](https://recharts.org)
-[![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
+The adaptive placement intelligence platform that predicts hiring outcomes, closes skill gaps, and gets students to the right jobs — faster.
 
-**A self-evolving placement intelligence engine that predicts your hiring probability before you apply.**
-
-[Live Demo](https://unifies.codes) · [ER Diagram](docs/ER_DIAGRAM.md) · [Architecture](docs/CFD_DIAGRAM.md)
+Production: **[www.unifies.codes](https://www.unifies.codes)** · API: **[backend.unifies.codes](https://backend.unifies.codes)**
 
 </div>
 
 ---
 
-## What Makes UNIFY Different
+## What UNIFY does
 
-| Feature | Internshala | LinkedIn | UNIFY |
-|---------|:-----------:|:--------:|:-----:|
-| Hiring probability per job | - | - | **72%** |
-| Self-learning model | - | - | **v47** |
-| Next-action AI | - | - | **Live** |
-| Interview prep per company | - | Paid | **Free** |
-| Cover letter generator | - | - | **1-click** |
-| Resume ATS scoring | Basic | Basic | **AI + gaps** |
-| "Roast My Profile" | - | - | **Viral** |
-| Behavioral obedience score | - | - | **Tracked** |
+UNIFY is a closed-loop career platform for students, mentors, placement cells, and employers. The platform fuses behavioral signals, real job-market data, and the **UNIFY Intelligence Engine** (a multi-provider AI router) to turn opaque hiring into a measurable, improvable pipeline.
 
----
+Key pillars:
 
-## Deployment Guide
-
-### Backend → Render
-
-#### Option A: Blueprint (Recommended)
-1. Fork this repo to your GitHub
-2. Go to [Render Dashboard](https://dashboard.render.com)
-3. Click **New → Blueprint** → Connect your repo
-4. Render reads `render.yaml` and auto-configures everything
-5. Fill in the secret env vars when prompted
-
-#### Option B: Manual
-1. **New Web Service** → Connect GitHub repo
-2. Configure:
-
-| Setting | Value |
-|---------|-------|
-| **Root Directory** | `backend` |
-| **Runtime** | Python 3 |
-| **Build Command** | `pip install -r requirements.txt` |
-| **Start Command** | `uvicorn server:app --host 0.0.0.0 --port $PORT` |
-
-3. **Environment Variables** (add all):
-
-```
-MONGO_URL=mongodb+srv://siba4738:Siba-4738@unify.9syusec.mongodb.net/?appName=unify
-DB_NAME=project_unify
-JWT_SECRET=a3f8b2c1d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1
-ADMIN_EMAIL=admin@example.com
-ADMIN_PASSWORD=admin123
-EMERGENT_LLM_KEY=<your-emergent-key>
-FRONTEND_URL=https://your-vercel-app.vercel.app
-RESEND_API_KEY=<your-resend-key>
-SENDER_EMAIL=onboarding@resend.dev
-```
-
-4. Click **Create Web Service** → Wait for deploy
-5. Your backend URL will be: `https://unifies.onrender.com`
-
-> **Important:** After Vercel deploy, come back and update `FRONTEND_URL` to your actual Vercel URL.
-
----
-
-### Frontend → Vercel
-
-1. Go to [vercel.com/new](https://vercel.com/new) → Import your GitHub repo
-2. Configure:
-
-| Setting | Value |
-|---------|-------|
-| **Root Directory** | `frontend` |
-| **Framework** | Next.js (auto-detected) |
-| **Build Command** | `next build` |
-| **Output Directory** | `.next` |
-
-3. **Environment Variables**:
-
-```
-NEXT_PUBLIC_API_URL=https://unifies.onrender.com
-```
-
-4. Click **Deploy**
-
-> **After deploy:** Go back to Render and set `FRONTEND_URL` to your Vercel URL.
-
----
-
-### Post-Deployment Checklist
-
-- [ ] Backend health: `curl https://unifies.onrender.com/api/health`
-- [ ] Login works: `curl -X POST https://unifies.onrender.com/api/auth/login -H "Content-Type: application/json" -d '{"email":"admin@example.com","password":"admin123"}'`
-- [ ] Frontend loads at your Vercel URL
-- [ ] Google OAuth: Click "Continue with Google" on login page
-- [ ] Update `FRONTEND_URL` on Render to match your Vercel URL
+- **Live job feed** — JSearch (RapidAPI) primary, Adzuna fallback. No demo data in production.
+- **UNIFY Intelligence Engine** — multi-provider AI router (Anthropic Claude → OpenAI GPT-4o → Google Gemini → universal fallback) with automatic failover. No feature depends on a single provider.
+- **UNIFY Auth** — direct Google OAuth (ID-token verification) + email/password + JWT cookies.
+- **Hiring probability** — real-time per-job prediction based on the live user profile + live job attributes.
+- **Per-user AI rate limiting** — enforced at the API level, persisted in MongoDB; protects the AI budget from viral spikes.
+- **Observability** — Sentry (opt-in), PostHog (opt-in), structured JSON logging, `/api/health` deep probe, and MongoDB indexing on every hot field.
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  FRONTEND (Vercel)                                   │
-│  Next.js 14 · TypeScript · Tailwind · GSAP          │
-│  Recharts · TanStack Query v5 · Zustand · PWA       │
-├─────────────────────┬───────────────────────────────┤
-│  BACKEND (Render)   │  AI LAYER                      │
-│  FastAPI · Motor    │  OpenAI GPT-4o                  │
-│  PyJWT · bcrypt     │  Self-learning weights          │
-│  WeasyPrint         │  Behavioral prediction          │
-│  WebSockets         │  Jaccard fallback               │
-├─────────────────────┼───────────────────────────────┤
-│  DATA              │  AUTH                            │
-│  MongoDB Atlas     │  JWT (1h + 7d refresh)           │
-│  Redis (optional)  │  Google OAuth (Emergent Auth)    │
-│  21 collections    │  httpOnly cookies + Bearer       │
-└─────────────────────┴───────────────────────────────┘
+Frontend (Next.js 14, React, Tailwind)          Backend (FastAPI)                    Data / AI
+────────────────────────────────                ────────────────────                 ──────────
+www.unifies.codes ──▶ Vercel ──▶ Next routes ─▶ backend.unifies.codes ──▶ Render ─▶ MongoDB Atlas
+                                                         │
+                                                         ├─▶ UNIFY AI router ─▶ Anthropic / OpenAI / Gemini
+                                                         ├─▶ UNIFY integrations ─▶ JSearch / Adzuna / Clearbit
+                                                         └─▶ Sentry / PostHog / structured logs
 ```
 
 ---
 
-## Features
+## Local setup
 
-### Intelligence Layer
-- **Hiring Probability** — Per-job odds with 5-factor breakdown
-- **Self-Learning Model** — Weights adapt on every hire/rejection outcome
-- **Decision Engine** — "Apply to X at Y" with urgency + impact
-- **Control System** — Risk level, momentum, weekly targets
-- **Predictive Alerts** — High-probability job notifications
-- **Behavioral Analytics** — Obedience score, friction detection
+### Prerequisites
 
-### AI Features
-- **Interview Prep** — 8 company-specific questions + STAR coaching
-- **Cover Letter** — 1-click tailored letter per job
-- **Resume Analyzer** — ATS score, keyword gaps, rewrite suggestions
-- **Career Chatbot** — Context-aware GPT-4o advisor
-- **Smart Recommendations** — AI-matched jobs with transparent scoring
+- Python ≥ 3.11
+- Node ≥ 20 + Yarn
+- MongoDB Atlas cluster (or local MongoDB)
 
-### Platform
-- **5 Role Dashboards** — Student, Mentor, Employer, Placement, Admin
-- **Recharts Analytics** — Bar, donut, radar charts + 12-week heatmap
-- **WeasyPrint Certificates** — Branded PDF with SHA256 verification
-- **Gamification** — XP, streaks, milestones, 5-category leaderboard
-- **Dark/Light Mode** — Full theme toggle with CSS variables
-- **i18n** — English, Hindi, Telugu, Tamil, Odia
-- **Google OAuth** — One-click social login
-- **PWA** — Installable on mobile
+### 1. Clone and configure
+
+```bash
+git clone <your-repo-url> unify && cd unify
+
+# Backend env
+cp backend/.env.example backend/.env
+#   fill backend/.env with real values (see sections below)
+
+# Frontend env
+cp frontend/.env.example frontend/.env
+#   fill frontend/.env with real values
+```
+
+### 2. Backend env variables
+
+Required:
+
+| Variable | Purpose |
+|---|---|
+| `MONGO_URL` | MongoDB Atlas connection string (use a user with DB-scoped role, not admin) |
+| `DB_NAME` | Database name (`unify_db`) |
+| `JWT_SECRET` | 64-char hex. Generate with `python -c 'import secrets; print(secrets.token_hex(32))'` |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Seeded admin account |
+| `FRONTEND_URL` | Full origin of your frontend (for CORS + cookies) |
+
+At least **one** AI provider key (router falls back automatically):
+
+| Variable | Priority |
+|---|---|
+| `ANTHROPIC_API_KEY` | 1 — Claude 3.5 Sonnet |
+| `OPENAI_API_KEY` | 2 — GPT-4o |
+| `GEMINI_API_KEY` | 3 — Gemini 2.0 Flash |
+| `UNIFY_AI_KEY` | 4 — universal fallback (renamed from legacy `EMERGENT_LLM_KEY`; still accepted during migration) |
+
+Live data + UNIFY Auth:
+
+| Variable | Purpose |
+|---|---|
+| `RAPIDAPI_KEY` | JSearch job feed |
+| `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` | Adzuna fallback |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google OAuth (ID-token verify) |
+| `RESEND_API_KEY` / `SENDER_EMAIL` | Transactional email |
+
+Optional (opt-in):
+
+| Variable | Purpose |
+|---|---|
+| `SENTRY_DSN_BACKEND` | Error tracking |
+| `CLEARBIT_API_KEY` | Company enrichment (logos always work without it) |
+
+See `backend/.env.example` for the full list.
+
+### 3. Frontend env variables
+
+```
+REACT_APP_BACKEND_URL=http://localhost:8001    # or your deployed backend URL
+NEXT_PUBLIC_API_URL=http://localhost:8001
+NEXT_PUBLIC_GOOGLE_CLIENT_ID=<same as backend>
+NEXT_PUBLIC_POSTHOG_KEY=<optional>
+NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
+NEXT_PUBLIC_SENTRY_DSN=<optional>
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+```
+
+### 4. Install + run
+
+```bash
+# Backend
+cd backend
+pip install -r requirements.txt
+uvicorn server:app --reload --host 0.0.0.0 --port 8001
+
+# Frontend (in another shell)
+cd ../frontend
+yarn install
+yarn dev
+```
+
+Health check: `curl http://localhost:8001/api/health` — should return `status: ok` and list configured providers.
 
 ---
 
-## Test Accounts
+## Deployment
 
-| Role | Email | Password |
-|------|-------|----------|
-| Admin | `admin@example.com` | `admin123` |
-| Student | `sibaprasadpanda56@gmail.com` | `siba-4738` |
-| Mentor | `mentor@unify.com` | `mentor123` |
-| Employer | `employer@unify.com` | `employer123` |
-| Placement | `placement@unify.com` | `placement123` |
+### Backend → Render
 
----
+1. **Push your repo to GitHub** (after verifying no secrets remain — see Security below).
+2. In Render dashboard: **New → Blueprint** and point to your repo.
+3. Render auto-detects `render.yaml`. It creates the `unify-api` web service.
+4. In **Environment**, fill every variable marked `sync: false` in `render.yaml`. `JWT_SECRET` is auto-generated by Render (`generateValue: true`).
+5. Set **Custom Domain** → `backend.unifies.codes`. Add the CNAME record in your DNS provider as Render instructs.
+6. Deploy. Render will run:
+   ```
+   pip install -r requirements.txt
+   uvicorn server:app --host 0.0.0.0 --port $PORT
+   ```
+7. Verify: `curl https://backend.unifies.codes/api/health`.
 
-## API (36+ verified endpoints)
+### Frontend → Vercel
 
-<details><summary><strong>All Endpoints — 100% passing</strong></summary>
+1. In Vercel dashboard: **Add New → Project** and import the same repo. Set **Root Directory** to `frontend`.
+2. Vercel auto-detects Next.js. Build command is `yarn build`, output `.next`.
+3. In **Environment Variables**, add the frontend variables from step 3 above. Set `REACT_APP_BACKEND_URL` and `NEXT_PUBLIC_API_URL` to `https://backend.unifies.codes`.
+4. Set **Domains** → `www.unifies.codes` and `unifies.codes` (redirect apex → www). Update DNS records as Vercel instructs.
+5. Deploy. The `frontend/vercel.json` sets security headers and redirects.
+6. Verify: open `https://www.unifies.codes` — the browser tab should read **UNIFY — Apply Where You Can Win**.
 
-| Status | Endpoint | Method |
-|--------|----------|--------|
-| OK | `/api/health` | GET |
-| OK | `/api/auth/login` | POST |
-| OK | `/api/auth/register` | POST |
-| OK | `/api/auth/me` | GET |
-| OK | `/api/auth/google/session` | POST |
-| OK | `/api/auth/refresh` | POST |
-| OK | `/api/auth/logout` | POST |
-| OK | `/api/profile` | GET/PUT |
-| OK | `/api/profile/strength` | GET |
-| OK | `/api/jobs` | GET/POST |
-| OK | `/api/applications` | GET/POST |
-| OK | `/api/next-action` | GET |
-| OK | `/api/control` | GET |
-| OK | `/api/hiring-probability` | POST |
-| OK | `/api/model/weights` | GET |
-| OK | `/api/alerts` | GET |
-| OK | `/api/interview-prep` | POST |
-| OK | `/api/cover-letter` | POST |
-| OK | `/api/resume/analyze` | POST |
-| OK | `/api/chatbot` | POST |
-| OK | `/api/recommendations` | GET |
-| OK | `/api/certificates` | GET |
-| OK | `/api/certificates/{id}/pdf` | GET |
-| OK | `/api/interviews` | GET/POST |
-| OK | `/api/leaderboard` | GET |
-| OK | `/api/momentum` | GET |
-| OK | `/api/activity-stream` | GET |
-| OK | `/api/skill-gap` | GET |
-| OK | `/api/user-behavior` | GET |
-| OK | `/api/analytics/overview` | GET |
-| OK | `/api/analytics/charts` | GET |
-| OK | `/api/analytics/heatmap` | GET |
-| OK | `/api/system-health` | GET |
-| OK | `/api/employer/best-candidates` | GET |
-| OK | `/api/trending-jobs` | GET |
-| OK | `/api/notifications` | GET |
+### DNS summary
 
-</details>
+| Host | Record | Target |
+|---|---|---|
+| `unifies.codes` | A / ALIAS | Vercel IP set |
+| `www.unifies.codes` | CNAME | `cname.vercel-dns.com` |
+| `backend.unifies.codes` | CNAME | `<your-service>.onrender.com` (shown in Render) |
+
+### Post-deploy smoke tests
+
+```bash
+curl https://backend.unifies.codes/api/health
+curl -X POST https://backend.unifies.codes/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@unifies.codes","password":"<your-admin-password>"}'
+```
 
 ---
 
-## Documentation
+## Security — what was rotated and what you must do
 
-| Document | Description |
-|----------|-------------|
-| [ER Diagram](docs/ER_DIAGRAM.md) | 21 collections, all relationships, index strategy |
-| [CFD/DFD](docs/CFD_DIAGRAM.md) | Context flow, data flow, state machine, deployment arch |
-| [render.yaml](render.yaml) | One-click Render blueprint |
+**Already done in this branch:**
+
+- Generated a new 64-char `JWT_SECRET` (see `backend/.env`).
+- Removed all test account credentials, API keys, and DB passwords from this README.
+- Renamed `EMERGENT_LLM_KEY` → `UNIFY_AI_KEY` everywhere (back-compat honored during transition).
+- Eliminated single-provider AI dependency via the multi-provider router.
+- Added `.gitignore` deduping; `.env` is now unambiguously ignored.
+- Added CORS allow-list (no wildcards).
+
+**You must do (one-time):**
+
+1. **Purge secrets from git history** (I cannot do this automatically; the platform blocks history-rewriting operations):
+   ```bash
+   pip install git-filter-repo
+   git filter-repo \
+     --invert-paths \
+     --path backend/.env --path frontend/.env \
+     --replace-text <(printf 'sk-emergent-62eB270B3Ed84E7024==>REDACTED\nre_3axreNgU_BqtS9EkG5mxdHoTNoqNwX6TZ==>REDACTED\nSiba-4738==>REDACTED\nv836grg24gfgwwbc7w3hfd@==>REDACTED\n')
+   git push --force origin master
+   ```
+   (Warn collaborators to re-clone after this.)
+2. **Rotate MongoDB Atlas credentials** — create a new DB user with least-privilege role. Update `MONGO_URL` in Render + local.
+3. **Restrict MongoDB Atlas IP access** — remove `0.0.0.0/0`. Add Render's static outbound IPs and your office IPs only.
+4. **Enable MongoDB Atlas audit logging** (Security → Advanced).
+5. **Rotate Resend API key** and update `RESEND_API_KEY`.
+6. **Rotate admin and demo passwords** in `backend/.env` — these are for development only.
+
+---
+
+## Multi-provider AI router
+
+All AI calls in the backend go through `backend/unify_ai.py`. Priority:
+
+1. **Anthropic Claude** (`ANTHROPIC_API_KEY`) — reasoning-heavy tasks
+2. **OpenAI GPT-4o** (`OPENAI_API_KEY`) — general purpose
+3. **Google Gemini** (`GEMINI_API_KEY`) — cost-efficient
+4. **UNIFY universal key** (`UNIFY_AI_KEY`) — covers 1+2 via a single vendor key
+
+Every call logs `{provider, model, latency_ms, prompt_chars, response_chars}`. `/api/health` exposes which providers are active.
+
+---
+
+## Rate limits
+
+Per-user, per-day, per-endpoint — enforced server-side and persisted in MongoDB (`ai_usage` collection). Caller can check their quota with `GET /api/ai-usage/me`. Exceeding a quota returns `429` with `{error, used, limit, reset_at, message}`.
+
+Defaults (free/student tier):
+
+- `cover-letter`: 5/day · `interview-prep`: 5/day · `resume-analyze`: 5/day
+- `chatbot`: 25/day · `recommendations-generate`: 10/day · `roast-profile`: 3/day
+
+Admin is unlimited. Higher tiers defined in `backend/unify_ratelimit.py`.
+
+---
+
+## Observability
+
+- **Structured logs** — JSON on stdout, ingestable by Logtail/Datadog/Loki.
+- **Sentry** (opt-in) — set `SENTRY_DSN_BACKEND` + `NEXT_PUBLIC_SENTRY_DSN`.
+- **PostHog** (opt-in) — set `NEXT_PUBLIC_POSTHOG_KEY`.
+- **`/api/health`** — MongoDB ping + AI provider status + integration status.
+
+---
+
+## Contributing
+
+1. Branch from `main` (`git checkout -b feat/your-feature`).
+2. Backend: `ruff check backend/` must pass.
+3. Frontend: `yarn lint` + `yarn build` must pass.
+4. All secrets in `.env` only — never in committed code.
 
 ---
 
 <div align="center">
-<sub>Built to compound. Every user improves the model. Every outcome sharpens predictions.</sub>
+<sub>UNIFY — Apply where you can win.</sub>
 </div>

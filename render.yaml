@@ -1,29 +1,101 @@
+# ─────────────────────────────────────────────────────────────
+# UNIFY — Render deployment blueprint
+# Domain: https://backend.unifies.codes
+# Do NOT commit real secret values. All `sync: false` keys must be
+# set in the Render Dashboard → Environment Variables.
+# ─────────────────────────────────────────────────────────────
 services:
   - type: web
     name: unify-api
     runtime: python
     region: oregon
+    plan: starter
     rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
     envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+      - key: APP_VERSION
+        value: "1.0.0"
+      - key: ENVIRONMENT
+        value: production
+      - key: FRONTEND_URL
+        value: https://www.unifies.codes
+      - key: EXTRA_CORS_ORIGINS
+        value: https://unifies.codes
+
+      # ── Database ──
       - key: MONGO_URL
         sync: false
       - key: DB_NAME
-        value: project_unify
+        value: unify_db
+
+      # ── Security ──
       - key: JWT_SECRET
         generateValue: true
+
+      # ── Admin & Demo accounts ──
       - key: ADMIN_EMAIL
-        value: admin@example.com
+        value: admin@unifies.codes
       - key: ADMIN_PASSWORD
         sync: false
-      - key: EMERGENT_LLM_KEY
+      - key: STUDENT_DEMO_PASSWORD
         sync: false
-      - key: FRONTEND_URL
+      - key: MENTOR_DEMO_PASSWORD
         sync: false
+      - key: EMPLOYER_DEMO_PASSWORD
+        sync: false
+      - key: PLACEMENT_DEMO_PASSWORD
+        sync: false
+
+      # ── UNIFY Intelligence Engine ──
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        value: claude-3-5-sonnet-20241022
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.0-flash
+      - key: UNIFY_AI_KEY
+        sync: false
+      - key: UNIFY_KEY_PROVIDER
+        value: openai
+      - key: UNIFY_KEY_MODEL
+        value: gpt-4o
+
+      # ── Google OAuth (UNIFY Auth) ──
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+
+      # ── Live data integrations ──
+      - key: RAPIDAPI_KEY
+        sync: false
+      - key: RAPIDAPI_HOST
+        value: jsearch.p.rapidapi.com
+      - key: ADZUNA_APP_ID
+        sync: false
+      - key: ADZUNA_APP_KEY
+        sync: false
+      - key: CLEARBIT_API_KEY
+        sync: false
+
+      # ── Email (Resend) ──
       - key: RESEND_API_KEY
         sync: false
       - key: SENDER_EMAIL
-        value: onboarding@resend.dev
-      - key: PYTHON_VERSION
-        value: "3.11.0"
+        value: support@unifies.codes
+
+      # ── Observability ──
+      - key: SENTRY_DSN_BACKEND
+        sync: false
+      - key: SENTRY_TRACES_SAMPLE_RATE
+        value: "0.1"

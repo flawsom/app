@@ -1,7 +1,7 @@
 # server.py — UNIFY: Adaptive Placement Intelligence Platform
 from fastapi import FastAPI, Request, Response, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -9,21 +9,56 @@ from contextlib import asynccontextmanager
 from typing import Optional, List
 from bson import ObjectId
 from dotenv import load_dotenv
-import os, jwt, bcrypt, hashlib, secrets, json, asyncio, csv, io, base64, logging
+import os, jwt, bcrypt, hashlib, secrets, json, asyncio, csv, io, base64, traceback
 
-logger = logging.getLogger("unify")
+# Load .env BEFORE importing unify_* modules (they read env at import time)
 load_dotenv()
+
+from unify_logger import setup_logger
+from unify_ai import generate as ai_generate, extract_json as ai_extract_json, providers_status as ai_providers_status, UnifyAIError
+from unify_ratelimit import check_and_increment, record_tokens
+from unify_integrations import search_jobs_live, jsearch_search, company_logo_url, providers_status as integrations_status
+
+logger = setup_logger("unify")
+
+APP_VERSION = os.getenv("APP_VERSION", "1.0.0")
 MONGO_URL = os.getenv("MONGO_URL")
-DB_NAME = os.getenv("DB_NAME", "project_unify")
-JWT_SECRET = os.getenv("JWT_SECRET", "secret")
+DB_NAME = os.getenv("DB_NAME", "unify_db")
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET or len(JWT_SECRET) < 32:
+    logger.warning("weak_jwt_secret", extra={"hint": "Set a 64-char JWT_SECRET in .env"})
+    JWT_SECRET = JWT_SECRET or "CHANGE_ME_INSECURE_DEFAULT_DO_NOT_USE_IN_PROD"
 JWT_ALGORITHM = "HS256"
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@example.com")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
-EMERGENT_LLM_KEY = os.getenv("EMERGENT_LLM_KEY", "")
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@unifies.codes")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+# Back-compat: accept either name during migration from EMERGENT_LLM_KEY
+UNIFY_AI_KEY = (os.getenv("UNIFY_AI_KEY") or os.getenv("EMERGENT_LLM_KEY") or "").strip()
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 REDIS_URL = os.getenv("REDIS_URL", "")
+SENTRY_DSN_BACKEND = os.getenv("SENTRY_DSN_BACKEND", "").strip()
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
 
-client = AsyncIOMotorClient(MONGO_URL)
+# ─── Sentry (opt-in) ──────────────────────────────────────────────
+if SENTRY_DSN_BACKEND:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.starlette import StarletteIntegration
+        sentry_sdk.init(
+            dsn=SENTRY_DSN_BACKEND,
+            environment=ENVIRONMENT,
+            release=f"unify-backend@{APP_VERSION}",
+            traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+            integrations=[FastApiIntegration(), StarletteIntegration()],
+            send_default_pii=False,
+        )
+        logger.info("sentry_initialized", extra={"env": ENVIRONMENT})
+    except Exception as _e:  # pragma: no cover
+        logger.warning("sentry_init_failed", extra={"error": str(_e)[:200]})
+
+client = AsyncIOMotorClient(MONGO_URL, serverSelectionTimeoutMS=8000)
 db = client[DB_NAME]
 
 # ─── Redis Graceful Fallback ──────────────────────────────────────
@@ -197,56 +232,203 @@ async def audit_log(uid, action, details=None, ip=None):
     await db.audit_logs.insert_one({"user_id": uid, "action": action, "details": details or {}, "ip_address": ip, "created_at": datetime.now(timezone.utc).isoformat()})
 
 # ─── Seed ─────────────────────────────────────────────────────────
+# Demo accounts pull passwords from env (with sensible fallbacks). These are
+# meant for local/dev demos only — rotate in production via env.
 DEMO_ACCOUNTS = [
-    {"email": "mentor@unify.com", "password": "mentor123", "name": "Dr. Sarah Mitchell", "role": "mentor"},
-    {"email": "employer@unify.com", "password": "employer123", "name": "TechCorp Solutions", "role": "employer"},
-    {"email": "placement@unify.com", "password": "placement123", "name": "Placement Officer", "role": "placement"},
+    {"email": "mentor@unifies.codes",    "password_env": "MENTOR_DEMO_PASSWORD",    "password_default": "mentor-demo-2026", "name": "Dr. Sarah Mitchell",    "role": "mentor"},
+    {"email": "employer@unifies.codes",  "password_env": "EMPLOYER_DEMO_PASSWORD",  "password_default": "employer-demo-2026", "name": "TechCorp Solutions", "role": "employer"},
+    {"email": "placement@unifies.codes", "password_env": "PLACEMENT_DEMO_PASSWORD", "password_default": "placement-demo-2026", "name": "Placement Officer", "role": "placement"},
+    {"email": "student@unifies.codes",   "password_env": "STUDENT_DEMO_PASSWORD",   "password_default": "student-demo-2026", "name": "Demo Student",       "role": "student"},
 ]
+
 async def seed_database():
     now = datetime.now(timezone.utc).isoformat()
-    admin = await db.users.find_one({"email": ADMIN_EMAIL})
-    if not admin:
-        await db.users.insert_one({"email": ADMIN_EMAIL, "password_hash": hash_password(ADMIN_PASSWORD), "name": "System Admin", "role": "admin", "is_active": True, "created_at": now, "updated_at": now})
-    elif not verify_password(ADMIN_PASSWORD, admin["password_hash"]):
-        await db.users.update_one({"email": ADMIN_EMAIL}, {"$set": {"password_hash": hash_password(ADMIN_PASSWORD)}})
+    # Admin — requires ADMIN_PASSWORD in env; refuses to seed weak/empty.
+    if not ADMIN_PASSWORD or len(ADMIN_PASSWORD) < 6:
+        logger.warning("admin_seed_skipped", extra={"hint": "Set ADMIN_PASSWORD in .env"})
+    else:
+        admin = await db.users.find_one({"email": ADMIN_EMAIL})
+        if not admin:
+            await db.users.insert_one({
+                "email": ADMIN_EMAIL, "password_hash": hash_password(ADMIN_PASSWORD),
+                "name": "System Admin", "role": "admin", "is_active": True,
+                "created_at": now, "updated_at": now,
+            })
+            logger.info("admin_seeded", extra={"email": ADMIN_EMAIL})
+        elif not verify_password(ADMIN_PASSWORD, admin["password_hash"]):
+            await db.users.update_one({"email": ADMIN_EMAIL}, {"$set": {"password_hash": hash_password(ADMIN_PASSWORD)}})
+            logger.info("admin_password_rotated")
+
     for acct in DEMO_ACCOUNTS:
+        password = os.getenv(acct["password_env"], acct["password_default"])
         existing = await db.users.find_one({"email": acct["email"]})
         if existing:
-            if not verify_password(acct["password"], existing["password_hash"]):
-                await db.users.update_one({"email": acct["email"]}, {"$set": {"password_hash": hash_password(acct["password"])}})
+            if not verify_password(password, existing["password_hash"]):
+                await db.users.update_one(
+                    {"email": acct["email"]},
+                    {"$set": {"password_hash": hash_password(password)}},
+                )
             continue
-        doc = {"email": acct["email"], "password_hash": hash_password(acct["password"]), "name": acct["name"], "role": acct["role"], "is_active": True, "created_at": now, "updated_at": now}
+        doc = {"email": acct["email"], "password_hash": hash_password(password),
+               "name": acct["name"], "role": acct["role"], "is_active": True,
+               "created_at": now, "updated_at": now}
         r = await db.users.insert_one(doc); uid = str(r.inserted_id)
         if acct["role"] == "mentor":
             await db.mentor_profiles.update_one({"user_id": uid}, {"$set": {"user_id": uid, "first_name": "Sarah", "last_name": "Mitchell", "department": "Computer Science", "designation": "Professor", "created_at": now}}, upsert=True)
         elif acct["role"] == "employer":
             await db.employer_profiles.update_one({"user_id": uid}, {"$set": {"user_id": uid, "company_name": "TechCorp Solutions", "industry": "Technology", "verification_status": "verified", "created_at": now}}, upsert=True)
+        elif acct["role"] == "student":
+            await db.student_profiles.update_one({"user_id": uid}, {"$set": {"user_id": uid, "first_name": "Demo", "last_name": "Student", "department": "Computer Science", "skills": ["Python", "React", "Node.js"], "created_at": now}}, upsert=True)
 
 async def create_indexes():
+    # Users
     await db.users.create_index("email", unique=True)
-    for col in ["student_profiles", "mentor_profiles", "employer_profiles"]: await db[col].create_index("user_id", unique=True)
-    await db.job_postings.create_index("status"); await db.job_postings.create_index("employer_id")
-    await db.applications.create_index([("student_id", 1), ("job_id", 1)], unique=True); await db.applications.create_index("status")
-    await db.certificates.create_index("blockchain_hash"); await db.certificates.create_index("student_id")
-    await db.notifications.create_index("user_id"); await db.audit_logs.create_index("user_id")
-    await db.login_attempts.create_index("identifier"); await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
+    await db.users.create_index("role")
+    await db.users.create_index("is_active")
+    # Profiles
+    for col in ["student_profiles", "mentor_profiles", "employer_profiles"]:
+        await db[col].create_index("user_id", unique=True)
+    # Jobs
+    await db.job_postings.create_index("status")
+    await db.job_postings.create_index("employer_id")
+    await db.job_postings.create_index("created_at")
+    await db.job_postings.create_index([("status", 1), ("created_at", -1)])
+    await db.job_postings.create_index("job_type")
+    await db.job_postings.create_index("source")
+    await db.job_postings.create_index("source_id")
+    # Applications
+    await db.applications.create_index([("student_id", 1), ("job_id", 1)], unique=True)
+    await db.applications.create_index("status")
+    await db.applications.create_index("applied_at")
+    await db.applications.create_index([("student_id", 1), ("applied_at", -1)])
+    await db.applications.create_index([("job_id", 1), ("applied_at", -1)])
+    await db.applications.create_index("mentor_id")
+    # Certificates
+    await db.certificates.create_index("blockchain_hash")
+    await db.certificates.create_index("student_id")
+    # Notifications
+    await db.notifications.create_index("user_id")
+    await db.notifications.create_index([("user_id", 1), ("read", 1), ("created_at", -1)])
+    # Audit + security
+    await db.audit_logs.create_index("user_id")
+    await db.audit_logs.create_index("created_at")
+    await db.login_attempts.create_index("identifier")
+    await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
+    # AI & behavior
+    await db.ai_usage.create_index([("user_id", 1), ("endpoint", 1), ("date", 1)], unique=True)
+    await db.ai_usage.create_index("date")
+    await db.behavior_events.create_index("user_id")
+    await db.behavior_events.create_index([("user_id", 1), ("created_at", -1)])
+    await db.user_momentum.create_index("user_id", unique=True)
+    await db.recommendations_cache.create_index("user_id")
+    await db.probability_predictions.create_index([("user_id", 1), ("job_id", 1)])
+    await db.hiring_outcomes.create_index("application_id", unique=True)
 
 @asynccontextmanager
 async def lifespan(app):
+    logger.info("startup_begin", extra={"env": ENVIRONMENT, "version": APP_VERSION})
     await cache.connect()
-    await create_indexes(); await seed_database(); yield
+    try:
+        await create_indexes()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("index_creation_failed", extra={"error": str(e)[:200]})
+    try:
+        await seed_database()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("seed_failed", extra={"error": str(e)[:200]})
+    logger.info("startup_complete", extra={
+        "ai_providers": ai_providers_status(),
+        "integrations": integrations_status(),
+    })
+    yield
+    logger.info("shutdown")
 
-app = FastAPI(title="UNIFY API", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=[
+app = FastAPI(title="UNIFY API", version=APP_VERSION, lifespan=lifespan)
+
+# CORS — explicit origin list (no wildcards). Add FRONTEND_URL at runtime.
+_allowed_origins = {
     FRONTEND_URL,
-    "https://www.unifies.codes", "https://unifies.codes",
-    "https://unifies.onrender.com",
-], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "https://www.unifies.codes",
+    "https://unifies.codes",
+    "https://backend.unifies.codes",
+}
+# Optional extra origins via env (comma-separated)
+for _o in os.getenv("EXTRA_CORS_ORIGINS", "").split(","):
+    _o = _o.strip()
+    if _o:
+        _allowed_origins.add(_o)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=list(_allowed_origins),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ─── Global error handler ────────────────────────────────────────
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Log + (optionally) Sentry-report any unhandled exception; return JSON 500."""
+    logger.error(
+        "unhandled_exception",
+        extra={"path": str(request.url.path), "method": request.method, "error": str(exc)[:300]},
+        exc_info=True,
+    )
+    if SENTRY_DSN_BACKEND:
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_exception(exc)
+        except Exception:
+            pass
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error", "request_id": secrets.token_hex(8)},
+    )
+
 
 # ─── Health ───────────────────────────────────────────────────────
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+    """Deep health check: pings Mongo, reports AI+integration provider status."""
+    mongo_ok = False
+    mongo_latency_ms = None
+    try:
+        import time as _t
+        _t0 = _t.time()
+        await asyncio.wait_for(client.admin.command("ping"), timeout=3)
+        mongo_latency_ms = int((_t.time() - _t0) * 1000)
+        mongo_ok = True
+    except Exception as e:  # noqa: BLE001
+        logger.warning("health_mongo_fail", extra={"error": str(e)[:200]})
+    ai = ai_providers_status()
+    any_ai = any(ai.values())
+    integrations = integrations_status()
+    status = "ok" if (mongo_ok and any_ai) else "degraded"
+    return {
+        "status": status,
+        "version": APP_VERSION,
+        "environment": ENVIRONMENT,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "mongo": {"ok": mongo_ok, "latency_ms": mongo_latency_ms},
+        "ai_providers": ai,
+        "integrations": integrations,
+        "sentry": bool(SENTRY_DSN_BACKEND),
+    }
+
+
+@app.get("/")
+async def root():
+    return {"name": "UNIFY API", "version": APP_VERSION, "docs": "/docs"}
+
+
+@app.get("/api/")
+async def api_root():
+    return {"message": "UNIFY API — Adaptive Placement Intelligence", "version": APP_VERSION}
+
 
 @app.options("/{full_path:path}")
 async def options_handler():
@@ -315,49 +497,81 @@ async def logout(response: Response, request: Request):
 async def me(request: Request):
     return await get_current_user(request)
 
-# ─── Google OAuth (Emergent Auth) ─────────────────────────────────
-@app.post("/api/auth/google/session")
-async def google_auth_session(request: Request, response: Response):
-    """Exchange Emergent Auth session_id for a UNIFY JWT token."""
-    body = await request.json(); session_id = body.get("session_id", "")
-    if not session_id: raise HTTPException(400, "session_id required")
-    import requests as http_requests
+# ─── Google OAuth (UNIFY Auth — direct Google ID-token verification) ─
+@app.post("/api/auth/google/verify")
+async def google_auth_verify(request: Request, response: Response):
+    """Verify a Google ID token (issued by Google Identity Services on the frontend)
+    and exchange it for a UNIFY JWT. Replaces the legacy third-party OAuth proxy.
+    """
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(500, "Google OAuth not configured on server (missing GOOGLE_CLIENT_ID)")
+    body = await request.json()
+    token_str = (body.get("credential") or body.get("id_token") or "").strip()
+    if not token_str:
+        raise HTTPException(400, "id_token / credential required")
     try:
-        resp = http_requests.get("https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
-            headers={"X-Session-ID": session_id}, timeout=10)
-        if resp.status_code != 200: raise HTTPException(401, "Invalid session")
-        data = resp.json()
-    except Exception as e:
-        raise HTTPException(401, f"OAuth session exchange failed: {str(e)[:100]}")
-    email = data.get("email", "").lower().strip()
-    name = data.get("name", "")
-    picture = data.get("picture", "")
-    session_token = data.get("session_token", "")
-    if not email: raise HTTPException(400, "No email returned from OAuth")
+        from google.oauth2 import id_token as google_id_token
+        from google.auth.transport import requests as google_requests
+        payload = await asyncio.to_thread(
+            google_id_token.verify_oauth2_token,
+            token_str,
+            google_requests.Request(),
+            GOOGLE_CLIENT_ID,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("google_verify_failed", extra={"error": str(e)[:200]})
+        raise HTTPException(401, "Google OAuth verification failed")
+    email = (payload.get("email") or "").lower().strip()
+    name = payload.get("name") or ""
+    picture = payload.get("picture") or ""
+    email_verified = payload.get("email_verified", False)
+    if not email:
+        raise HTTPException(400, "No email in Google token")
+    if not email_verified:
+        raise HTTPException(400, "Google email is not verified")
     now = datetime.now(timezone.utc).isoformat()
-    # Find or create user
     user = await db.users.find_one({"email": email})
     if user:
         uid = str(user["_id"])
-        await db.users.update_one({"_id": user["_id"]}, {"$set": {"name": name or user.get("name",""), "picture": picture, "updated_at": now}})
+        await db.users.update_one(
+            {"_id": user["_id"]},
+            {"$set": {"name": name or user.get("name", ""), "picture": picture, "auth_provider": "google", "updated_at": now}},
+        )
     else:
-        user_doc = {"email": email, "password_hash": "", "name": name, "role": "student",
-                    "is_active": True, "picture": picture, "auth_provider": "google",
-                    "created_at": now, "updated_at": now}
+        # Default role — student (can be escalated by admin). Role can also be
+        # provided by frontend as body["role"] for self-registration.
+        requested_role = body.get("role", "student")
+        if requested_role not in {"student", "mentor", "employer", "placement"}:
+            requested_role = "student"
+        user_doc = {
+            "email": email, "password_hash": "", "name": name, "role": requested_role,
+            "is_active": True, "picture": picture, "auth_provider": "google",
+            "created_at": now, "updated_at": now,
+        }
         r = await db.users.insert_one(user_doc); uid = str(r.inserted_id)
-        # Create student profile
-        parts = name.split(" ", 1)
-        await db.student_profiles.insert_one({"user_id": uid, "first_name": parts[0], "last_name": parts[1] if len(parts) > 1 else "", "skills": [], "created_at": now, "updated_at": now})
-    # Store Emergent session
-    await db.user_sessions.update_one({"user_id": uid}, {"$set": {"user_id": uid, "session_token": session_token,
-        "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(), "created_at": now}}, upsert=True)
-    # Issue UNIFY JWT
-    access = create_access_token(uid, email); refresh = create_refresh_token(uid)
-    set_auth_cookies(response, access, refresh)
-    response.set_cookie("session_token", session_token, httponly=True, path="/", max_age=604800, **({k: v for k, v in COOKIE_KW.items() if k not in ["httponly","path"]}))
-    await audit_log(uid, "google_login", {"email": email})
+        parts = (name or email.split("@")[0]).split(" ", 1)
+        fn, ln = parts[0], (parts[1] if len(parts) > 1 else "")
+        if requested_role == "student":
+            await db.student_profiles.insert_one({"user_id": uid, "first_name": fn, "last_name": ln, "skills": [], "created_at": now, "updated_at": now})
+        elif requested_role == "mentor":
+            await db.mentor_profiles.insert_one({"user_id": uid, "first_name": fn, "last_name": ln, "created_at": now})
+        elif requested_role == "employer":
+            await db.employer_profiles.insert_one({"user_id": uid, "company_name": name or email, "verification_status": "pending", "created_at": now})
+    access = create_access_token(uid, email); refresh_tok = create_refresh_token(uid)
+    set_auth_cookies(response, access, refresh_tok)
+    await audit_log(uid, "google_login", {"email": email}, request.client.host if request.client else None)
     user_data = await db.users.find_one({"_id": ObjectId(uid)})
     result = clean_user(user_data); result["access_token"] = access; return result
+
+
+# Deprecated Emergent Auth endpoint — kept temporarily to surface a clear
+# 410 Gone error to any older frontend session cached in users' browsers.
+@app.post("/api/auth/google/session")
+async def google_auth_session_deprecated(request: Request):
+    raise HTTPException(
+        status_code=410,
+        detail="This endpoint has been replaced. Please sign in again using the updated UNIFY Google sign-in button.",
+    )
 
 @app.post("/api/auth/refresh")
 async def refresh(request: Request, response: Response):
@@ -456,21 +670,47 @@ async def profile_strength(request: Request):
 
 # ─── Job Routes ───────────────────────────────────────────────────
 @app.get("/api/jobs")
-async def list_jobs(request: Request, status: Optional[str] = None, job_type: Optional[str] = None, search: Optional[str] = None, page: int = 1, limit: int = 20):
+async def list_jobs(request: Request, status: Optional[str] = None, job_type: Optional[str] = None,
+                    search: Optional[str] = None, location: Optional[str] = None, source: Optional[str] = None,
+                    page: int = 1, limit: int = 20):
+    """List jobs. If DB has few results and the caller is a student, live results
+    from JSearch/Adzuna are merged in and persisted for future queries."""
     query = {}
+    is_public_student_view = True
     try:
         user = await get_current_user(request)
         if user["role"] == "employer":
             emp = await db.employer_profiles.find_one({"user_id": user["id"]})
             if emp: query["employer_id"] = str(emp["_id"])
+            is_public_student_view = False
+        else:
+            query["status"] = "active"
     except Exception:
         query["status"] = "active"
     if status: query["status"] = status
     if job_type: query["job_type"] = job_type
-    if search: query["$or"] = [{"title": {"$regex": search, "$options": "i"}}, {"description": {"$regex": search, "$options": "i"}}, {"company_name": {"$regex": search, "$options": "i"}}]
+    if search: query["$or"] = [
+        {"title": {"$regex": search, "$options": "i"}},
+        {"description": {"$regex": search, "$options": "i"}},
+        {"company_name": {"$regex": search, "$options": "i"}},
+        {"required_skills": {"$regex": search, "$options": "i"}},
+    ]
+    # If student-facing view and DB is thin, trigger a background-ish sync first.
+    if is_public_student_view and page == 1 and source != "db":
+        db_count_estimate = await db.job_postings.count_documents({"status": "active"})
+        if db_count_estimate < 6 or source == "live":
+            try:
+                q = search or "software intern"
+                await _sync_live_jobs_to_db(queries=[q], location=location or "India")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("inline_live_sync_failed", extra={"error": str(e)[:200]})
     total = await db.job_postings.count_documents(query)
     jobs = await db.job_postings.find(query).sort("created_at", -1).skip((page-1)*limit).limit(limit).to_list(limit)
-    for j in jobs: j["_id"] = str(j["_id"]); j["id"] = j["_id"]; j["application_count"] = await db.applications.count_documents({"job_id": j["id"]})
+    for j in jobs:
+        j["_id"] = str(j["_id"]); j["id"] = j["_id"]
+        j["application_count"] = await db.applications.count_documents({"job_id": j["id"]})
+        if not j.get("company_logo") and j.get("company_name"):
+            j["company_logo"] = company_logo_url(j["company_name"])
     return {"jobs": jobs, "total": total, "page": page, "limit": limit}
 
 @app.post("/api/jobs")
@@ -605,28 +845,37 @@ async def get_recommendations(request: Request):
 @app.post("/api/recommendations/generate")
 async def force_generate_recommendations(request: Request):
     user = await require_role("student")(request)
+    quota = await check_and_increment(db, user, "recommendations-generate")
     profile = await db.student_profiles.find_one({"user_id": user["id"]})
     if not profile: raise HTTPException(400, "Complete your profile first")
     jobs = await db.job_postings.find({"status": "active"}).to_list(50)
     if not jobs: return {"recommendations": [], "message": "No active jobs"}
+    skills = profile.get("skills", []); bio = profile.get("bio", ""); dept = profile.get("department", "")
+    jobs_data = [{"id": str(j["_id"]), "title": j.get("title",""), "description": j.get("description","")[:300], "required_skills": j.get("required_skills",[]), "job_type": j.get("job_type",""), "company": j.get("company_name",""), "location": j.get("location",""), "stipend_min": j.get("stipend_min"), "stipend_max": j.get("stipend_max")} for j in jobs]
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        skills = profile.get("skills", []); bio = profile.get("bio", ""); dept = profile.get("department", "")
-        jobs_data = [{"id": str(j["_id"]), "title": j.get("title",""), "description": j.get("description","")[:300], "required_skills": j.get("required_skills",[]), "job_type": j.get("job_type",""), "company": j.get("company_name",""), "location": j.get("location",""), "stipend_min": j.get("stipend_min"), "stipend_max": j.get("stipend_max")} for j in jobs]
-        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"rec-{user['id']}", system_message="Return ONLY valid JSON.").with_model("openai", "gpt-5.2")
-        resp = await chat.send_message(UserMessage(text=f"Score 0-100 each job for student. Skills={','.join(skills)}, Dept={dept}, Bio={bio}. Jobs: {json.dumps(jobs_data)}. Return JSON array: [{{\"job_id\":\"...\",\"score\":0-100,\"reason\":\"1 sentence\"}}]"))
-        text = resp.strip()
-        if text.startswith("```"): text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-        scored = json.loads(text)
+        ai = await ai_generate(
+            system="You are the UNIFY Intelligence Engine. Return ONLY valid JSON, no prose, no markdown.",
+            prompt=(
+                f"Score each job 0-100 for this student. "
+                f"Skills={','.join(skills)}, Dept={dept}, Bio={bio}. "
+                f"Jobs: {json.dumps(jobs_data)}. "
+                "Return a JSON array: [{\"job_id\":\"...\",\"score\":0-100,\"reason\":\"1 sentence\"}]"
+            ),
+            session_id=f"rec-{user['id']}",
+            max_tokens=2500,
+        )
+        scored = ai_extract_json(ai["text"])
         recs = []
         for s in scored:
             jd = next((j for j in jobs_data if j["id"] == s.get("job_id")), None)
             if jd: recs.append({"job_id": s["job_id"], "title": jd["title"], "company": jd["company"], "location": jd["location"], "job_type": jd["job_type"], "stipend_min": jd["stipend_min"], "stipend_max": jd["stipend_max"], "score": s.get("score",0), "reason": s.get("reason",""), "required_skills": jd["required_skills"]})
-        await db.recommendations_cache.update_one({"user_id": user["id"]}, {"$set": {"user_id": user["id"], "recommendations": recs, "generated_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
-        return {"recommendations": recs, "generated_at": datetime.now(timezone.utc).isoformat()}
-    except Exception:
+        await db.recommendations_cache.update_one({"user_id": user["id"]}, {"$set": {"user_id": user["id"], "recommendations": recs, "generated_at": datetime.now(timezone.utc).isoformat(), "ai_provider": ai["provider"]}}, upsert=True)
+        await record_tokens(db, user, "recommendations-generate", tokens_estimated=len(ai["text"]) // 4, provider=ai["provider"])
+        return {"recommendations": recs, "generated_at": datetime.now(timezone.utc).isoformat(), "ai_provider": ai["provider"], "quota": quota}
+    except Exception as e:
+        logger.warning("recs_ai_failed", extra={"error": str(e)[:200]})
         recs = await fallback_recommendations(profile, jobs)
-        return {"recommendations": recs, "generated_at": datetime.now(timezone.utc).isoformat()}
+        return {"recommendations": recs, "generated_at": datetime.now(timezone.utc).isoformat(), "ai_provider": "fallback_heuristic", "quota": quota}
 
 async def fallback_recommendations(profile, jobs):
     skills = set(s.lower() for s in profile.get("skills", []))
@@ -864,13 +1113,26 @@ async def get_leaderboard(request: Request, category: str = "xp"):
 async def chatbot(request: Request):
     user = await get_current_user(request); body = await request.json(); message = body.get("message", "")
     if not message: raise HTTPException(400, "Message required")
+    quota = await check_and_increment(db, user, "chatbot")
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"chat-{user['id']}", system_message=f"You are UNIFY Career Assistant. User: {user['name']} ({user['role']})").with_model("openai", "gpt-5.2")
-        response = await chat.send_message(UserMessage(text=message))
-        return {"response": response}
+        ai = await ai_generate(
+            system=(
+                "You are the UNIFY Career Assistant — concise, friendly, and tactical. "
+                f"User: {user.get('name','')} ({user.get('role','student')}). "
+                "Give direct actionable advice. No fluff."
+            ),
+            prompt=message,
+            session_id=f"chat-{user['id']}",
+            max_tokens=800,
+        )
+        await record_tokens(db, user, "chatbot", tokens_estimated=len(ai["text"]) // 4, provider=ai["provider"])
+        return {"response": ai["text"], "ai_provider": ai["provider"], "quota": quota}
+    except UnifyAIError as e:
+        logger.warning("chatbot_all_providers_failed", extra={"error": str(e)[:200]})
+        return {"response": "I'm temporarily unavailable. Please try again in a minute.", "ai_provider": "none", "quota": quota}
     except Exception as e:
-        return {"response": f"I'm having trouble right now. ({str(e)[:80]})"}
+        logger.error("chatbot_error", extra={"error": str(e)[:200]})
+        return {"response": "I hit an unexpected error. Please try again.", "ai_provider": "none", "quota": quota}
 
 # ═══════════════════════════════════════════════════════════════════
 # INTELLIGENCE LAYER: Self-Learning + Decision Engine + Probability
@@ -1086,29 +1348,72 @@ async def system_health(request: Request):
             "metrics": {"total_users": await db.users.count_documents({}), "total_students": tst, "total_applications": ta, "total_selected": ts, "total_rejected": tr, "conversion_rate": round(ts/max(ta,1),3), "weekly_applications": ra},
             "model": {"version": wdoc.get("version",0), "outcomes_processed": wdoc.get("outcomes_processed",0), "weights": await _get_model_weights(), "learning_rate": max(0.005, LEARNING_RATE/(1+wdoc.get("outcomes_processed",0)/500))}}
 
-# ─── Seed Demo Jobs ───────────────────────────────────────────────
+# ─── Seed Demo Jobs (live via JSearch) ────────────────────────────
 @app.post("/api/seed/demo")
 async def seed_demo_data(request: Request):
+    """Seed an initial set of real jobs pulled from the live JSearch API.
+    Called once on a fresh environment; no-ops if jobs already exist."""
     await require_role("admin")(request)
-    if await db.job_postings.count_documents({}) > 0: return {"message": "Demo data exists"}
-    emp = await db.users.find_one({"email": "employer@unify.com"})
-    if not emp: return {"message": "No employer account"}
-    eid = str(emp["_id"]); ep = await db.employer_profiles.find_one({"user_id": eid})
-    epid = str(ep["_id"]) if ep else eid
-    jobs = [
-        {"title": "Full Stack Developer Intern", "description": "Build web apps with React/Node.", "job_type": "internship", "location": "Bangalore", "is_remote": False, "stipend_min": 15000, "stipend_max": 25000, "duration_months": 6, "required_skills": ["React","Node.js","MongoDB","JavaScript","Git"], "status": "active"},
-        {"title": "ML Research Intern", "description": "Work on ML models for NLP.", "job_type": "internship", "location": "Remote", "is_remote": True, "stipend_min": 20000, "stipend_max": 35000, "duration_months": 3, "required_skills": ["Python","TensorFlow","PyTorch","Machine Learning","NLP"], "status": "active"},
-        {"title": "Data Analyst Trainee", "description": "Analyze business data.", "job_type": "training", "location": "Mumbai", "is_remote": False, "stipend_min": 12000, "stipend_max": 18000, "duration_months": 4, "required_skills": ["SQL","Python","Excel","Tableau","Statistics"], "status": "active"},
-        {"title": "DevOps Engineer Intern", "description": "CI/CD and cloud infrastructure.", "job_type": "internship", "location": "Hyderabad", "is_remote": False, "stipend_min": 18000, "stipend_max": 28000, "duration_months": 6, "required_skills": ["Docker","Kubernetes","AWS","Linux","Git"], "status": "active"},
-        {"title": "UI/UX Design Intern", "description": "Design interfaces for web/mobile.", "job_type": "internship", "location": "Remote", "is_remote": True, "stipend_min": 10000, "stipend_max": 20000, "duration_months": 3, "required_skills": ["Figma","UI Design","UX Research","Prototyping","CSS"], "status": "active"},
-        {"title": "Backend Developer", "description": "Full-time backend with microservices.", "job_type": "placement", "location": "Pune", "is_remote": False, "stipend_min": 40000, "stipend_max": 60000, "duration_months": 12, "required_skills": ["Python","FastAPI","PostgreSQL","Docker","Redis"], "status": "active"},
-    ]
+    if await db.job_postings.count_documents({}) > 0:
+        return {"message": "Job data already exists, skipping seed"}
+    count = await _sync_live_jobs_to_db(queries=["software intern", "data analyst", "ML intern"])
+    return {"message": f"Seeded {count} live jobs from JSearch/Adzuna"}
+
+
+@app.post("/api/jobs/sync-live")
+async def sync_live_jobs(request: Request):
+    """Admin/placement: pull fresh live jobs from JSearch/Adzuna into the DB."""
+    await require_role("admin", "placement")(request)
+    body = await request.json() if (await request.body()) else {}
+    queries = body.get("queries") or ["software intern", "data analyst", "ML intern", "frontend intern", "backend developer"]
+    count = await _sync_live_jobs_to_db(queries=queries, location=body.get("location", "India"))
+    return {"message": f"Synced {count} live jobs", "queries": queries}
+
+
+async def _sync_live_jobs_to_db(queries: list, location: str = "India") -> int:
+    """Pull live jobs from JSearch/Adzuna and upsert into job_postings."""
+    inserted = 0
     now = datetime.now(timezone.utc).isoformat()
-    for j in jobs:
-        j["employer_id"] = epid; j["employer_user_id"] = eid; j["company_name"] = "TechCorp Solutions"
-        j["application_deadline"] = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(); j["created_at"] = now; j["updated_at"] = now
-        await db.job_postings.insert_one(j)
-    return {"message": f"Seeded {len(jobs)} jobs"}
+    # Resolve a placeholder employer for live jobs
+    emp_user = await db.users.find_one({"email": "employer@unifies.codes"})
+    emp_id = str(emp_user["_id"]) if emp_user else "system"
+    emp_profile = await db.employer_profiles.find_one({"user_id": emp_id}) if emp_user else None
+    emp_profile_id = str(emp_profile["_id"]) if emp_profile else emp_id
+    for q in queries:
+        jobs = await search_jobs_live(q, location=location, limit=25)
+        for j in jobs:
+            if not j.get("source_id"):
+                continue
+            exists = await db.job_postings.find_one({"source": j["source"], "source_id": j["source_id"]})
+            if exists:
+                continue
+            doc = {
+                "title": j["title"],
+                "description": j["description"],
+                "job_type": "internship" if "intern" in (j["title"] + " " + (j.get("job_type") or "")).lower() else "fulltime",
+                "location": j.get("location") or "Remote",
+                "is_remote": bool(j.get("is_remote")),
+                "stipend_min": j.get("salary_min"),
+                "stipend_max": j.get("salary_max"),
+                "salary_currency": j.get("salary_currency"),
+                "required_skills": j.get("required_skills") or [],
+                "application_deadline": j.get("deadline") or (datetime.now(timezone.utc) + timedelta(days=45)).isoformat(),
+                "status": "active",
+                "source": j["source"],
+                "source_id": j["source_id"],
+                "apply_url": j.get("apply_url"),
+                "company_name": j.get("company_name") or "Unknown",
+                "company_logo": j.get("company_logo") or company_logo_url((j.get("company_website") or "").replace("https://", "").replace("http://", "").split("/")[0] if j.get("company_website") else j.get("company_name", "")),
+                "employer_id": emp_profile_id,
+                "employer_user_id": emp_id,
+                "created_at": j.get("posted_at") or now,
+                "updated_at": now,
+            }
+            await db.job_postings.insert_one(doc)
+            inserted += 1
+    logger.info("live_jobs_synced", extra={"count": inserted, "queries": queries})
+    return inserted
+
 
 # ═══════════════════════════════════════════════════════════════════
 # INTERVIEW PREP AI
@@ -1117,6 +1422,7 @@ async def seed_demo_data(request: Request):
 async def interview_prep(request: Request):
     """Generate interview questions and prep material for a specific job."""
     user = await get_current_user(request); body = await request.json()
+    quota = await check_and_increment(db, user, "interview-prep")
     job_id = body.get("job_id", ""); job = None
     if job_id:
         try: job = await db.job_postings.find_one({"_id": ObjectId(job_id)})
@@ -1127,19 +1433,30 @@ async def interview_prep(request: Request):
     company = job.get("company_name", "the company") if job else body.get("company", "the company")
     req_skills = job.get("required_skills", []) if job else []
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"prep-{user['id']}-{job_id}", system_message="You are a senior career coach. Return ONLY valid JSON.").with_model("openai", "gpt-4o")
-        prompt = f"""Generate interview prep for: {job_title} at {company}.
-Required skills: {', '.join(req_skills)}. Student skills: {', '.join(skills)}. Dept: {dept}.
-Return JSON: {{"questions": [{{"question": "...", "category": "technical|behavioral|situational", "difficulty": "easy|medium|hard", "tip": "1-sentence answer strategy"}}], "company_brief": "2-sentence company research note", "star_examples": ["1 STAR example they could prepare"], "do_list": ["things to do before interview"], "dont_list": ["things to avoid"]}}
-Generate 8 questions (4 technical, 2 behavioral, 2 situational)."""
-        resp = await chat.send_message(UserMessage(text=prompt))
-        text = resp.strip()
-        if text.startswith("```"): text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-        data = json.loads(text); data["job_title"] = job_title; data["company"] = company
+        prompt = (
+            f"Generate interview prep for: {job_title} at {company}.\n"
+            f"Required skills: {', '.join(req_skills)}. Student skills: {', '.join(skills)}. Dept: {dept}.\n"
+            'Return JSON: {"questions": [{"question": "...", "category": "technical|behavioral|situational", '
+            '"difficulty": "easy|medium|hard", "tip": "1-sentence answer strategy"}], '
+            '"company_brief": "2-sentence company research note", '
+            '"star_examples": ["1 STAR example they could prepare"], '
+            '"do_list": ["things to do before interview"], '
+            '"dont_list": ["things to avoid"]}\n'
+            "Generate 8 questions (4 technical, 2 behavioral, 2 situational)."
+        )
+        ai = await ai_generate(
+            system="You are a senior career coach. Return ONLY valid JSON, no prose, no markdown.",
+            prompt=prompt,
+            session_id=f"prep-{user['id']}-{job_id}",
+            max_tokens=2000,
+        )
+        data = ai_extract_json(ai["text"])
+        data["job_title"] = job_title; data["company"] = company
+        data["ai_provider"] = ai["provider"]; data["quota"] = quota
+        await record_tokens(db, user, "interview-prep", tokens_estimated=len(ai["text"]) // 4, provider=ai["provider"])
         return data
     except Exception as e:
-        # Fallback: generate basic questions
+        logger.warning("interview_prep_fallback", extra={"error": str(e)[:200]})
         questions = [
             {"question": f"Explain your experience with {req_skills[0] if req_skills else 'your primary skill'}.", "category": "technical", "difficulty": "medium", "tip": "Use specific project examples with measurable outcomes"},
             {"question": "Tell me about a time you faced a challenging deadline.", "category": "behavioral", "difficulty": "medium", "tip": "Use STAR framework: Situation, Task, Action, Result"},
@@ -1148,7 +1465,7 @@ Generate 8 questions (4 technical, 2 behavioral, 2 situational)."""
         ]
         for s in req_skills[:3]:
             questions.append({"question": f"Explain the core concepts of {s} and when you'd use it.", "category": "technical", "difficulty": "medium", "tip": f"Relate {s} to a real project you've worked on"})
-        return {"questions": questions[:8], "company_brief": f"Research {company}'s recent projects and tech stack.", "star_examples": ["Prepare 2-3 STAR stories from your projects"], "do_list": ["Research the company", "Practice coding problems", "Prepare questions to ask"], "dont_list": ["Don't badmouth previous experiences", "Don't say 'I don't know' without trying"], "job_title": job_title, "company": company}
+        return {"questions": questions[:8], "company_brief": f"Research {company}'s recent projects and tech stack.", "star_examples": ["Prepare 2-3 STAR stories from your projects"], "do_list": ["Research the company", "Practice coding problems", "Prepare questions to ask"], "dont_list": ["Don't badmouth previous experiences", "Don't say 'I don't know' without trying"], "job_title": job_title, "company": company, "ai_provider": "fallback_heuristic", "quota": quota}
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1159,18 +1476,30 @@ async def generate_cover_letter(request: Request):
     """Generate a tailored cover letter for a specific job."""
     user = await get_current_user(request); body = await request.json(); job_id = body.get("job_id", "")
     if not job_id: raise HTTPException(400, "job_id required")
+    quota = await check_and_increment(db, user, "cover-letter")
     try: job = await db.job_postings.find_one({"_id": ObjectId(job_id)})
     except: raise HTTPException(404, "Job not found")
     if not job: raise HTTPException(404, "Job not found")
     profile = await db.student_profiles.find_one({"user_id": user["id"]}) or {}
     skills = profile.get("skills", []); bio = profile.get("bio", ""); dept = profile.get("department", "")
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"cl-{user['id']}-{job_id}", system_message="You are an expert career advisor. Write concise, impactful cover letters.").with_model("openai", "gpt-4o")
-        resp = await chat.send_message(UserMessage(text=f"Write a professional cover letter (200 words max) for {user.get('name','')} applying to {job['title']} at {job.get('company_name','')}. Skills: {', '.join(skills)}. Bio: {bio}. Dept: {dept}. Job requires: {', '.join(job.get('required_skills',[]))}. Job desc: {job.get('description','')[:300]}"))
-        return {"cover_letter": resp.strip(), "job_title": job["title"], "company": job.get("company_name", "")}
+        ai = await ai_generate(
+            system="You are an expert career advisor. Write concise, impactful cover letters. No placeholder text, no brackets.",
+            prompt=(
+                f"Write a professional cover letter (200 words max) for {user.get('name','')} "
+                f"applying to {job['title']} at {job.get('company_name','')}. "
+                f"Skills: {', '.join(skills)}. Bio: {bio}. Dept: {dept}. "
+                f"Job requires: {', '.join(job.get('required_skills',[]))}. "
+                f"Job desc: {job.get('description','')[:500]}"
+            ),
+            session_id=f"cl-{user['id']}-{job_id}",
+            max_tokens=700,
+        )
+        await record_tokens(db, user, "cover-letter", tokens_estimated=len(ai["text"]) // 4, provider=ai["provider"])
+        return {"cover_letter": ai["text"].strip(), "job_title": job["title"], "company": job.get("company_name", ""), "ai_provider": ai["provider"], "quota": quota}
     except Exception as e:
-        return {"cover_letter": f"Dear Hiring Manager,\n\nI am writing to express my interest in the {job['title']} position at {job.get('company_name','')}. With skills in {', '.join(skills[:3])}, I am confident I can contribute meaningfully to your team.\n\nBest regards,\n{user.get('name','')}", "job_title": job["title"], "company": job.get("company_name", "")}
+        logger.warning("cover_letter_fallback", extra={"error": str(e)[:200]})
+        return {"cover_letter": f"Dear Hiring Manager,\n\nI am writing to express my interest in the {job['title']} position at {job.get('company_name','')}. With skills in {', '.join(skills[:3])}, I am confident I can contribute meaningfully to your team.\n\nBest regards,\n{user.get('name','')}", "job_title": job["title"], "company": job.get("company_name", ""), "ai_provider": "fallback_heuristic", "quota": quota}
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1180,10 +1509,38 @@ async def generate_cover_letter(request: Request):
 async def analyze_resume(request: Request):
     """AI-powered resume analysis: score, keyword gaps, rewrite suggestions."""
     user = await require_role("student")(request); body = await request.json()
+    quota = await check_and_increment(db, user, "resume-analyze")
     job_id = body.get("job_id")
     profile = await db.student_profiles.find_one({"user_id": user["id"]}) or {}
     resume_text = profile.get("resume_text", "")
     upload = await db.uploads.find_one({"user_id": user["id"], "type": "resume"})
+    # If no manually-pasted resume text but a PDF was uploaded, extract text server-side.
+    if not resume_text and upload:
+        try:
+            raw = upload.get("file_data", "")
+            if "," in raw:
+                raw = raw.split(",", 1)[1]
+            pdf_bytes = base64.b64decode(raw)
+            try:
+                from pypdf import PdfReader  # preferred
+            except Exception:
+                from PyPDF2 import PdfReader  # type: ignore
+            reader = PdfReader(io.BytesIO(pdf_bytes))
+            extracted = []
+            for page in reader.pages[:10]:
+                try:
+                    extracted.append(page.extract_text() or "")
+                except Exception:
+                    continue
+            resume_text = ("\n".join(extracted)).strip()
+            if resume_text:
+                # Cache extracted text back on profile for future runs
+                await db.student_profiles.update_one(
+                    {"user_id": user["id"]},
+                    {"$set": {"resume_text": resume_text[:15000]}},
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("resume_pdf_parse_failed", extra={"error": str(e)[:200]})
     if not resume_text and not upload:
         raise HTTPException(400, "No resume found. Upload a resume or paste resume text in your profile.")
     job = None; job_skills = []
@@ -1192,22 +1549,32 @@ async def analyze_resume(request: Request):
         except: pass
         if job: job_skills = job.get("required_skills", [])
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"resume-{user['id']}", system_message="You are an expert ATS resume reviewer. Return ONLY valid JSON.").with_model("openai", "gpt-4o")
-        context = f"Resume text: {resume_text[:2000]}" if resume_text else "Resume uploaded as PDF (analyze based on profile data)"
+        context = f"Resume text: {resume_text[:4000]}" if resume_text else "Resume uploaded as PDF (analyze based on profile data)"
         job_context = f"Target job: {job['title']} at {job.get('company_name','')}. Required: {', '.join(job_skills)}" if job else "General analysis"
-        resp = await chat.send_message(UserMessage(text=f"""{context}
-Profile skills: {', '.join(profile.get('skills',[]))}. Dept: {profile.get('department','')}.
-{job_context}
-Return JSON: {{"score": 0-100, "ats_score": 0-100, "strengths": ["..."], "weaknesses": ["..."], "keyword_gaps": ["missing keywords"], "rewrite_suggestions": [{{"original": "weak bullet", "improved": "stronger version"}}], "auto_fill": {{"skills": ["detected skills"], "department": "detected dept"}}}}"""))
-        text = resp.strip()
-        if text.startswith("```"): text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-        data = json.loads(text); data["has_resume"] = bool(resume_text or upload)
+        ai = await ai_generate(
+            system="You are an expert ATS resume reviewer. Return ONLY valid JSON, no prose, no markdown.",
+            prompt=(
+                f"{context}\n"
+                f"Profile skills: {', '.join(profile.get('skills',[]))}. Dept: {profile.get('department','')}.\n"
+                f"{job_context}\n"
+                'Return JSON: {"score": 0-100, "ats_score": 0-100, "strengths": ["..."], "weaknesses": ["..."], '
+                '"keyword_gaps": ["missing keywords"], '
+                '"rewrite_suggestions": [{"original": "weak bullet", "improved": "stronger version"}], '
+                '"auto_fill": {"skills": ["detected skills"], "department": "detected dept"}}'
+            ),
+            session_id=f"resume-{user['id']}",
+            max_tokens=2000,
+        )
+        data = ai_extract_json(ai["text"])
+        data["has_resume"] = bool(resume_text or upload)
+        data["ai_provider"] = ai["provider"]; data["quota"] = quota
+        await record_tokens(db, user, "resume-analyze", tokens_estimated=len(ai["text"]) // 4, provider=ai["provider"])
         return data
     except Exception as e:
+        logger.warning("resume_analyze_fallback", extra={"error": str(e)[:200]})
         student_skills = set(s.lower() for s in profile.get("skills", []))
         missing = [s for s in job_skills if s.lower() not in student_skills] if job_skills else []
-        return {"score": 60 if resume_text else 30, "ats_score": 50, "strengths": ["Profile has skills listed"], "weaknesses": ["Add more detail to resume text"], "keyword_gaps": missing[:5], "rewrite_suggestions": [], "auto_fill": {"skills": profile.get("skills", []), "department": profile.get("department", "")}, "has_resume": bool(resume_text or upload)}
+        return {"score": 60 if resume_text else 30, "ats_score": 50, "strengths": ["Profile has skills listed"], "weaknesses": ["Add more detail to resume text"], "keyword_gaps": missing[:5], "rewrite_suggestions": [], "auto_fill": {"skills": profile.get("skills", []), "department": profile.get("department", "")}, "has_resume": bool(resume_text or upload), "ai_provider": "fallback_heuristic", "quota": quota}
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1317,7 +1684,7 @@ async def record_outcome(request: Request):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# TRENDING JOBS
+# TRENDING JOBS (DB + live)
 # ═══════════════════════════════════════════════════════════════════
 @app.get("/api/trending-jobs")
 async def trending_jobs(request: Request):
@@ -1329,8 +1696,96 @@ async def trending_jobs(request: Request):
     for t in trending:
         try: job = await db.job_postings.find_one({"_id": ObjectId(t["_id"])})
         except: continue
-        if job: results.append({"job_id": str(job["_id"]), "title": job.get("title",""), "company": job.get("company_name",""), "applications_48h": t["count"], "urgency": "Trending"})
+        if job:
+            results.append({
+                "job_id": str(job["_id"]), "title": job.get("title",""),
+                "company": job.get("company_name",""), "company_logo": job.get("company_logo"),
+                "applications_48h": t["count"], "urgency": "Trending", "source": "db",
+            })
+    # Augment with live hot postings if we don't have enough trending internally
+    if len(results) < 5:
+        try:
+            live = await jsearch_search("software intern", location="India", num_pages=1)
+            for j in live[: 5 - len(results)]:
+                results.append({
+                    "job_id": None,
+                    "title": j.get("title", ""),
+                    "company": j.get("company_name", ""),
+                    "company_logo": j.get("company_logo") or company_logo_url(j.get("company_website") or j.get("company_name", "")),
+                    "applications_48h": None,
+                    "urgency": "Hot (Live)",
+                    "source": j.get("source"),
+                    "source_id": j.get("source_id"),
+                    "apply_url": j.get("apply_url"),
+                    "location": j.get("location"),
+                })
+        except Exception as e:  # noqa: BLE001
+            logger.warning("trending_live_augment_failed", extra={"error": str(e)[:200]})
     return {"trending": results}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ROAST MY PROFILE (AI, rate-limited)
+# ═══════════════════════════════════════════════════════════════════
+@app.post("/api/roast-profile")
+async def roast_profile(request: Request):
+    """Friendly-but-sharp AI roast of a student profile. Rate-limited."""
+    user = await get_current_user(request)
+    quota = await check_and_increment(db, user, "roast-profile")
+    body = await request.json() if (await request.body()) else {}
+    # Allow roasting arbitrary profile input (text) OR the caller's saved profile
+    profile_text = body.get("profile_text")
+    if not profile_text:
+        profile = await db.student_profiles.find_one({"user_id": user["id"]}) or {}
+        profile_text = json.dumps({
+            "name": user.get("name"),
+            "bio": profile.get("bio"),
+            "department": profile.get("department"),
+            "cgpa": profile.get("cgpa"),
+            "skills": profile.get("skills", []),
+            "linkedin_url": profile.get("linkedin_url"),
+            "github_url": profile.get("github_url"),
+        })
+    try:
+        ai = await ai_generate(
+            system=(
+                "You are UNIFY's brutally honest but encouraging career roaster. "
+                "Roast the given profile in 3-5 punchy lines. End with one actionable upgrade."
+                " Return JSON: {\"roast\": \"...\", \"score\": 0-100, \"fix\": \"...\"}"
+            ),
+            prompt=f"Profile: {profile_text}",
+            session_id=f"roast-{user['id']}",
+            max_tokens=400,
+        )
+        try:
+            data = ai_extract_json(ai["text"])
+        except Exception:
+            data = {"roast": ai["text"].strip(), "score": 60, "fix": "Add more concrete accomplishments with metrics."}
+        data["ai_provider"] = ai["provider"]; data["quota"] = quota
+        await record_tokens(db, user, "roast-profile", tokens_estimated=len(ai["text"]) // 4, provider=ai["provider"])
+        return data
+    except Exception as e:
+        logger.warning("roast_fallback", extra={"error": str(e)[:200]})
+        return {"roast": "Your profile is cautious, which is another word for invisible. Fewer buzzwords, more shipped things.", "score": 55, "fix": "Add one project link and one measurable outcome per bullet.", "ai_provider": "fallback_heuristic", "quota": quota}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# AI USAGE (per-user quota visibility)
+# ═══════════════════════════════════════════════════════════════════
+@app.get("/api/ai-usage/me")
+async def my_ai_usage(request: Request):
+    """Return the caller's daily AI usage vs. quota per endpoint."""
+    user = await get_current_user(request)
+    from unify_ratelimit import QUOTAS, _tier_for, _reset_at_iso
+    tier = _tier_for(user)
+    today = datetime.now(timezone.utc).date().isoformat()
+    out = {}
+    for ep, tiers in QUOTAS.items():
+        limit = tiers.get(tier, 5)
+        doc = await db.ai_usage.find_one({"user_id": user["id"], "endpoint": ep, "date": today})
+        used = (doc or {}).get("count", 0)
+        out[ep] = {"used": used, "limit": limit, "remaining": max(0, limit - used)}
+    return {"tier": tier, "date": today, "reset_at": _reset_at_iso(), "endpoints": out}
 
 
 # ═══════════════════════════════════════════════════════════════════

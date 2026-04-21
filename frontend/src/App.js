@@ -1,3 +1,6 @@
+// Legacy CRA entrypoint (kept for compatibility with older bootstrap code).
+// Production uses Next.js app router under src/app/*.
+// Deliberately minimal — all real routes and UI live in src/app/*.
 import { useEffect } from "react";
 import "@/App.css";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
@@ -7,32 +10,17 @@ const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
 const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
-
   useEffect(() => {
-    helloWorldApi();
+    axios.get(`${API}/`).catch(() => { /* noop */ });
   }, []);
 
   return (
-    <div>
-      <header className="App-header">
-        <a
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
+    <div className="min-h-screen flex items-center justify-center" style={{ background: "#010104", color: "#F0F0F5" }}>
+      <div className="text-center">
+        <div className="text-[10px] tracking-[0.3em] text-[#00E5FF]">UNIFY</div>
+        <h1 className="text-4xl font-black tracking-tighter mt-2">Apply where you can win.</h1>
+        <p className="text-sm text-white/60 mt-2">Adaptive placement intelligence.</p>
+      </div>
     </div>
   );
 };

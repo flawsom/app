@@ -224,7 +224,7 @@ graph TB
         REDIS[(Redis Cloud)]
         OPENAI["OpenAI API"]
         RESEND["Resend Email"]
-        GAUTH["Google OAuth<br/>(Emergent)"]
+        GAUTH["Google OAuth<br/>(UNIFY Auth)"]
     end
 
     FE <-->|"HTTPS + JWT"| API

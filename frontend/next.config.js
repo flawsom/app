@@ -3,9 +3,10 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
+  allowedDevOrigins: [
+    'hiring-engine-dev.cluster-12.preview.emergentcf.cloud',
+    'hiring-engine-dev.preview.emergentagent.com',
+  ],
   typescript: {
     ignoreBuildErrors: true,
   },

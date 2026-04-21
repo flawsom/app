@@ -6,8 +6,9 @@ import json
 from datetime import datetime
 
 class ComprehensiveUnifyTester:
-    def __init__(self, base_url="https://hiring-engine-dev.preview.emergentagent.com"):
-        self.base_url = base_url
+    def __init__(self, base_url=None):
+        import os
+        self.base_url = base_url or os.getenv("UNIFY_TEST_URL", "http://localhost:8001")
         self.tests_run = 0
         self.tests_passed = 0
         self.results = []
