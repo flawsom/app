@@ -18,11 +18,16 @@ from unify_logger import setup_logger
 from unify_ai import generate as ai_generate, extract_json as ai_extract_json, providers_status as ai_providers_status, UnifyAIError
 from unify_email import (
     send_email as email_send,
+    set_email_db,
     welcome_email,
     application_submitted_email,
     employer_new_application_email,
     application_status_email,
     certificate_issued_email,
+    password_reset_email,
+    interview_scheduled_email,
+    high_probability_job_alert_email,
+    weekly_digest_email,
 )
 from unify_ratelimit import check_and_increment, record_tokens
 from unify_integrations import search_jobs_live, jsearch_search, company_logo_url, providers_status as integrations_status
@@ -39,8 +44,8 @@ if not JWT_SECRET or len(JWT_SECRET) < 32:
 JWT_ALGORITHM = "HS256"
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@unifies.codes")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
-# Back-compat: accept either name during migration from EMERGENT_LLM_KEY
-UNIFY_AI_KEY = (os.getenv("UNIFY_AI_KEY") or os.getenv("EMERGENT_LLM_KEY") or "").strip()
+UNIFY_AI_KEY = os.getenv("UNIFY_AI_KEY", "").strip()
+SCHEDULER_SECRET = os.getenv("SCHEDULER_SECRET", "").strip()
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
@@ -344,14 +349,47 @@ async def lifespan(app):
         await seed_database()
     except Exception as e:  # noqa: BLE001
         logger.warning("seed_failed", extra={"error": str(e)[:200]})
-    # Nightly cron: recompute global model weights from all outcomes at 02:00 UTC.
+    # Wire email persistence (email_logs collection)
+    try:
+        set_email_db(db)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("email_db_wiring_failed", extra={"error": str(e)[:200]})
+    # Ensure TTL index on scheduler_locks so stale locks auto-expire (90s TTL).
+    try:
+        await db.scheduler_locks.create_index("expires_at", expireAfterSeconds=0, name="ttl_expires")
+        await db.email_logs.create_index("created_at", name="email_logs_created_idx")
+        await db.email_logs.create_index("status", name="email_logs_status_idx")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("index_ttl_failed", extra={"error": str(e)[:200]})
+    # Scheduler with Mongo-based distributed lock. Every job checks the
+    # scheduler_locks collection (TTL-indexed) before executing — so replicas
+    # cannot double-fire the same scheduled task. Render Cron HTTP endpoints
+    # (see /api/cron/*) are an additional layer protected by SCHEDULER_SECRET.
     scheduler = None
     try:
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
         scheduler = AsyncIOScheduler(timezone="UTC")
-        scheduler.add_job(_cron_recompute_weights, "cron", hour=2, minute=0, id="nightly_recompute_weights")
+        scheduler.add_job(
+            lambda: asyncio.create_task(run_with_lock("nightly_recompute_weights", _cron_recompute_weights, ttl_seconds=1200)),
+            "cron", hour=2, minute=0, id="nightly_recompute_weights",
+        )
+        scheduler.add_job(
+            lambda: asyncio.create_task(run_with_lock("weekly_digest", _cron_weekly_digest, ttl_seconds=1800)),
+            "cron", day_of_week="mon", hour=9, minute=0, id="weekly_digest",
+        )
+        scheduler.add_job(
+            lambda: asyncio.create_task(run_with_lock("trending_refresh", _cron_trending_refresh, ttl_seconds=600)),
+            "cron", hour="*", minute=15, id="trending_refresh",
+        )
+        scheduler.add_job(
+            lambda: asyncio.create_task(run_with_lock("streak_resets", _cron_streak_resets, ttl_seconds=600)),
+            "cron", hour=0, minute=5, id="streak_resets",
+        )
         scheduler.start()
-        logger.info("scheduler_started", extra={"jobs": ["nightly_recompute_weights@02:00 UTC"]})
+        logger.info("scheduler_started", extra={
+            "jobs": ["nightly_recompute_weights@02:00 UTC", "weekly_digest@mon 09:00 UTC",
+                      "trending_refresh@hourly :15", "streak_resets@00:05 UTC"],
+        })
     except Exception as e:  # noqa: BLE001
         logger.warning("scheduler_start_failed", extra={"error": str(e)[:200]})
     logger.info("startup_complete", extra={
@@ -368,33 +406,107 @@ async def lifespan(app):
     logger.info("shutdown")
 
 
-async def _cron_recompute_weights():
-    """Cron-invoked version of /api/model/recompute-weights.
-    No auth. Multi-replica safe via a Mongo-based leader lock (only one replica per window wins).
+async def run_with_lock(job_name: str, coro_factory, ttl_seconds: int = 1200) -> Optional[bool]:
+    """Run a scheduled coroutine guarded by a Mongo-based distributed lock.
+
+    - Uses a TTL-indexed `scheduler_locks` collection so stale locks auto-expire.
+    - Uses atomic `find_one_and_update` with a conditional filter (no lock OR expired).
+    - Guarantees exactly-one execution per (job_name, window) across ANY number
+      of replicas (Render, K8s, local).
+
+    `coro_factory` is either a coroutine OR a no-arg callable that returns one.
+    Returns True if the job ran, False if skipped (lock held by another instance).
     """
-    # Leader-election: claim a lock doc valid for 20 minutes. If another replica has claimed
-    # within that window, skip. This keeps behaviour correct on Render free/starter (single replica)
-    # AND on multi-replica setups without needing Redis.
-    lock_key = "cron_nightly_recompute"
     now = datetime.now(timezone.utc)
-    lock_expiry = (now + timedelta(minutes=20)).isoformat()
+    expires_at = now + timedelta(seconds=ttl_seconds)
+    holder = os.getenv("HOSTNAME", "local")
     try:
-        # Upsert only if no lock or existing lock expired
-        res = await db.cron_locks.find_one_and_update(
-            {"_id": lock_key, "$or": [{"expires_at": {"$lt": now.isoformat()}}, {"expires_at": {"$exists": False}}]},
-            {"$set": {"_id": lock_key, "acquired_at": now.isoformat(), "expires_at": lock_expiry, "holder": os.getenv("HOSTNAME", "local")}},
+        # Acquire: upsert only if lock is missing or expired.
+        res = await db.scheduler_locks.find_one_and_update(
+            {
+                "_id": job_name,
+                "$or": [
+                    {"expires_at": {"$lt": now}},
+                    {"expires_at": {"$exists": False}},
+                ],
+            },
+            {"$set": {"_id": job_name, "acquired_at": now, "expires_at": expires_at, "holder": holder}},
             upsert=True,
             return_document=True,
         )
-        # If the returned doc was claimed by someone else within the window, its acquired_at != now.
-        if res and res.get("acquired_at") and res["acquired_at"] != now.isoformat():
-            logger.info("cron_recompute_skipped", extra={"reason": "lock_held", "holder": res.get("holder")})
-            return
+        # If the returned doc was claimed in a different tick (different holder/time), skip.
+        if res and res.get("holder") != holder:
+            logger.info("scheduled_job_skipped_lock_held", extra={"job": job_name, "holder": res.get("holder")})
+            return False
     except Exception as e:  # noqa: BLE001
-        # If the lock doc already exists (race), the upsert-on-filter returns None — just move on.
-        # We prefer "false positive skipped run" over "double run".
-        logger.info("cron_lock_contested", extra={"error": str(e)[:200]})
-        return
+        # DuplicateKey on concurrent upsert → another replica wins. Skip.
+        logger.info("scheduled_job_lock_contested", extra={"job": job_name, "error": str(e)[:200]})
+        return False
+    # Acquired. Run and release on completion/exception.
+    try:
+        coro = coro_factory() if callable(coro_factory) else coro_factory
+        await coro
+        logger.info("scheduled_job_ok", extra={"job": job_name})
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.error("scheduled_job_failed", extra={"job": job_name, "error": str(e)[:300]})
+        return True
+    finally:
+        # Release early so manual re-runs don't have to wait for TTL.
+        try:
+            await db.scheduler_locks.delete_one({"_id": job_name, "holder": holder})
+        except Exception:
+            pass
+
+
+async def _cron_weekly_digest() -> None:
+    """Send the weekly digest to every active student (idempotent-safe per week)."""
+    students = await db.users.find({"role": "student", "is_active": True}).to_list(2000)
+    sent = 0
+    for s in students:
+        sid = str(s["_id"])
+        apps = await db.applications.count_documents({"student_id": sid})
+        selected = await db.applications.count_documents({"student_id": sid, "status": "selected"})
+        active_jobs = await db.job_postings.count_documents({"status": "active"})
+        try:
+            sub, html, text = weekly_digest_email(s.get("name", ""), apps, selected, active_jobs)
+            await email_send(s["email"], sub, html, text, email_type="weekly_digest")
+            sent += 1
+        except Exception as e:  # noqa: BLE001
+            logger.warning("weekly_digest_user_failed", extra={"user": sid, "error": str(e)[:200]})
+    logger.info("weekly_digest_done", extra={"sent": sent, "total": len(students)})
+
+
+async def _cron_trending_refresh() -> None:
+    """Refresh cached trending job counts (last 48h) for fast reads."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+    pipeline = [
+        {"$match": {"applied_at": {"$gte": cutoff}}},
+        {"$group": {"_id": "$job_id", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 20},
+    ]
+    trending = await db.applications.aggregate(pipeline).to_list(20)
+    await db.cache_trending.update_one(
+        {"_id": "global"},
+        {"$set": {"data": trending, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    logger.info("trending_refresh_done", extra={"rows": len(trending)})
+
+
+async def _cron_streak_resets() -> None:
+    """Reset streaks for users who haven't acted in the last 48h."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+    res = await db.user_momentum.update_many(
+        {"last_active": {"$lt": cutoff}, "current_streak": {"$gt": 0}},
+        {"$set": {"current_streak": 0}},
+    )
+    logger.info("streak_reset_done", extra={"reset_count": res.modified_count})
+
+
+async def _cron_recompute_weights():
+    """Nightly recompute of global model weights from all recorded outcomes."""
     try:
         outcomes = await db.hiring_outcomes.find({}).to_list(5000)
         if not outcomes:
@@ -417,7 +529,7 @@ async def _cron_recompute_weights():
         shifted = {k: max(0.0, scores[k] / n_valid + DEFAULT_WEIGHTS[k]) for k in DEFAULT_WEIGHTS}
         total = sum(shifted.values()) or 1.0
         new_weights = {k: round(v / total, 4) for k, v in shifted.items()}
-        now_iso = now.isoformat()
+        now_iso = datetime.now(timezone.utc).isoformat()
         await db.model_weights.update_one(
             {"_id": "global"},
             {"$set": {**new_weights, "outcomes_processed": n_valid, "version": n_valid, "updated_at": now_iso, "recomputed_at": now_iso, "recomputed_by": "cron"}},
@@ -571,7 +683,7 @@ async def register(req: RegisterReq, response: Response, request: Request):
     # Welcome email (fire-and-forget)
     try:
         sub, html, text = welcome_email(req.name, req.role)
-        await email_send(email, sub, html, text)
+        await email_send(email, sub, html, text, email_type="welcome")
     except Exception as e:  # noqa: BLE001
         logger.warning("welcome_email_schedule_failed", extra={"error": str(e)[:200]})
     user_doc["id"] = uid; user_doc.pop("_id", None); user_doc.pop("password_hash", None); user_doc["access_token"] = access
@@ -684,7 +796,7 @@ async def google_auth_verify(request: Request, response: Response):
     result = clean_user(user_data); result["access_token"] = access; return result
 
 
-# Deprecated Emergent Auth endpoint — kept temporarily to surface a clear
+# Deprecated legacy OAuth endpoint — kept temporarily to surface a clear
 # 410 Gone error to any older frontend session cached in users' browsers.
 @app.post("/api/auth/google/session")
 async def google_auth_session_deprecated(request: Request):
@@ -716,7 +828,14 @@ async def forgot_password(request: Request):
     if not user: return {"message": "If the email exists, a reset link has been sent"}
     token = secrets.token_urlsafe(32)
     await db.password_reset_tokens.insert_one({"user_id": str(user["_id"]), "token": token, "expires_at": datetime.now(timezone.utc) + timedelta(hours=1), "used": False, "created_at": datetime.now(timezone.utc).isoformat()})
-    return {"message": "If the email exists, a reset link has been sent", "reset_token": token}
+    # Fire the reset email via the logged/retrying sender.
+    try:
+        reset_url = f"{FRONTEND_URL.rstrip('/')}/reset-password?token={token}"
+        sub, html, text = password_reset_email(user.get("name", ""), reset_url)
+        await email_send(email, sub, html, text, email_type="password_reset")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("password_reset_email_failed", extra={"error": str(e)[:200]})
+    return {"message": "If the email exists, a reset link has been sent"}
 
 @app.post("/api/auth/reset-password")
 async def reset_password(request: Request):
@@ -884,7 +1003,7 @@ async def create_application(req: ApplicationCreate, request: Request):
         prob_result = await _compute_hire_probability(profile, job, apps_count, job_apps)
         prob = prob_result.get("probability", 0.0)
         sub, html, text = application_submitted_email(user.get("name", ""), job.get("title", ""), job.get("company_name", ""), prob)
-        await email_send(user["email"], sub, html, text)
+        await email_send(user["email"], sub, html, text, email_type="application_submitted")
     except Exception as e:  # noqa: BLE001
         logger.warning("application_email_student_failed", extra={"error": str(e)[:200]})
     try:
@@ -895,7 +1014,7 @@ async def create_application(req: ApplicationCreate, request: Request):
                 skills_overlap = list(set(s.lower() for s in (profile.get("skills") or [])) & set(s.lower() for s in (job.get("required_skills") or [])))
                 fit = f"Matches {len(skills_overlap)} of {len(job.get('required_skills') or [])} required skills · UNIFY hire probability {int(prob*100)}%"
                 sub, html, text = employer_new_application_email(emp_user.get("name", ""), user.get("name", ""), job.get("title", ""), fit)
-                await email_send(emp_user["email"], sub, html, text)
+                await email_send(emp_user["email"], sub, html, text, email_type="employer_new_application")
     except Exception as e:  # noqa: BLE001
         logger.warning("application_email_employer_failed", extra={"error": str(e)[:200]})
     await audit_log(user["id"], "apply", {"job_id": req.job_id})
@@ -947,7 +1066,7 @@ async def update_application_status(app_id: str, request: Request):
             student_user = await db.users.find_one({"_id": ObjectId(app_doc["student_id"])})
             if student_user and student_user.get("email"):
                 sub, html, text = application_status_email(student_user.get("name", ""), app_doc.get("job_title", ""), app_doc.get("company_name", ""), new_status)
-                await email_send(student_user["email"], sub, html, text)
+                await email_send(student_user["email"], sub, html, text, email_type="application_status")
         except Exception as e:  # noqa: BLE001
             logger.warning("status_email_failed", extra={"error": str(e)[:200]})
     await audit_log(user["id"], "update_app_status", {"app_id": app_id, "status": new_status})
@@ -989,7 +1108,7 @@ async def employer_feedback(app_id: str, req: FeedbackReq, request: Request):
             student_user = await db.users.find_one({"_id": ObjectId(app_doc["student_id"])})
             if student_user and student_user.get("email"):
                 sub, html, text = certificate_issued_email(student_user.get("name", ""), cert["title"], cert["blockchain_hash"])
-                await email_send(student_user["email"], sub, html, text)
+                await email_send(student_user["email"], sub, html, text, email_type="certificate_issued")
         except Exception as e:  # noqa: BLE001
             logger.warning("cert_email_failed", extra={"error": str(e)[:200]})
     return {"message": "Feedback submitted"}
@@ -1191,6 +1310,18 @@ async def create_interview(req: InterviewCreate, request: Request):
     r = await db.interviews.insert_one(interview); interview["_id"] = str(r.inserted_id); interview["id"] = interview["_id"]
     await db.applications.update_one({"_id": ObjectId(req.application_id)}, {"$set": {"status": "interview_scheduled"}})
     await create_notification(app_doc["student_id"], "Interview Scheduled", f"Interview for {app_doc.get('job_title','')} on {req.scheduled_date}", "info")
+    # Email the student — durable, logged, retried.
+    try:
+        student_user = await db.users.find_one({"_id": ObjectId(app_doc["student_id"])})
+        if student_user and student_user.get("email"):
+            sub, html, text = interview_scheduled_email(
+                student_user.get("name", ""), app_doc.get("job_title", ""),
+                app_doc.get("company_name", ""), req.scheduled_date,
+                req.interview_type, req.meeting_link,
+            )
+            await email_send(student_user["email"], sub, html, text, email_type="interview_scheduled")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("interview_email_failed", extra={"error": str(e)[:200]})
     return interview
 
 @app.get("/api/interviews")
@@ -2306,23 +2437,23 @@ async def my_ai_usage(request: Request):
 # ═══════════════════════════════════════════════════════════════════
 @app.post("/api/digest/send")
 async def send_weekly_digest(request: Request):
-    """Send weekly digest email to all students via Resend."""
+    """Admin-triggered weekly digest. In production the APScheduler + Mongo lock
+    OR the Render Cron endpoint (/api/cron/weekly-digest) handles this automatically."""
     await require_role("admin", "placement")(request)
-    resend_key = os.getenv("RESEND_API_KEY", ""); sender = os.getenv("SENDER_EMAIL", "onboarding@resend.dev")
-    if not resend_key: raise HTTPException(400, "Resend not configured")
-    import resend as resend_lib; resend_lib.api_key = resend_key
-    students = await db.users.find({"role": "student", "is_active": True}).to_list(500)
+    students = await db.users.find({"role": "student", "is_active": True}).to_list(2000)
     sent = 0
     for s in students:
-        sid = str(s["_id"]); apps = await db.applications.count_documents({"student_id": sid})
+        sid = str(s["_id"])
+        apps = await db.applications.count_documents({"student_id": sid})
         selected = await db.applications.count_documents({"student_id": sid, "status": "selected"})
         active_jobs = await db.job_postings.count_documents({"status": "active"})
         try:
-            resend_lib.Emails.send({"from": sender, "to": s["email"], "subject": "UNIFY Weekly Digest",
-                "html": f"<h2>Hi {s['name']},</h2><p>You have <b>{apps}</b> applications, <b>{selected}</b> selections.</p><p><b>{active_jobs}</b> active jobs waiting for you.</p><p>— UNIFY Intelligence Engine</p>"})
+            sub, html, text = weekly_digest_email(s.get("name", ""), apps, selected, active_jobs)
+            await email_send(s["email"], sub, html, text, email_type="weekly_digest")
             sent += 1
-        except: pass
-    return {"message": f"Digest sent to {sent}/{len(students)} students"}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("digest_user_failed", extra={"error": str(e)[:200]})
+    return {"message": f"Digest queued for {sent}/{len(students)} students"}
 
 @app.get("/api/digest/preview")
 async def digest_preview(request: Request):
@@ -2343,3 +2474,83 @@ async def websocket_endpoint(ws: WebSocket, user_id: str):
             if data == "ping": await ws.send_json({"type": "pong"})
     except WebSocketDisconnect:
         ws_manager.disconnect(ws, user_id)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# EMAIL LOGS — admin visibility into email delivery health
+# ═══════════════════════════════════════════════════════════════════
+@app.get("/api/admin/email-logs")
+async def admin_email_logs(request: Request, limit: int = 50):
+    """Admin-only email delivery health dashboard.
+
+    Returns counters (sent / permanently_failed / retrying / skipped_no_key / pending)
+    plus the most-recent `limit` log rows. Limit max = 200.
+    """
+    await require_role("admin", "placement")(request)
+    limit = max(1, min(int(limit), 200))
+    statuses = ["sent", "permanently_failed", "retrying", "pending", "skipped_no_key"]
+    counters: dict = {}
+    for s in statuses:
+        counters[s] = await db.email_logs.count_documents({"status": s})
+    # Last-24h counters for at-a-glance health
+    since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    counters["sent_24h"] = await db.email_logs.count_documents({"status": "sent", "updated_at": {"$gte": since}})
+    counters["failed_24h"] = await db.email_logs.count_documents({"status": "permanently_failed", "updated_at": {"$gte": since}})
+    rows = await db.email_logs.find({}).sort("created_at", -1).limit(limit).to_list(limit)
+    for r in rows:
+        r["id"] = str(r.pop("_id"))
+    return {"counts": counters, "recent": rows, "total": sum(counters.get(s, 0) for s in statuses)}
+
+
+@app.post("/api/admin/email-logs/retry/{log_id}")
+async def admin_email_retry(log_id: str, request: Request):
+    """Manually requeue a failed/skipped email row."""
+    await require_role("admin")(request)
+    row = await db.email_logs.find_one({"_id": log_id})
+    if not row:
+        raise HTTPException(404, "Log not found")
+    # Reset state and fire-and-forget a fresh send. Note: the HTML body is not
+    # stored (privacy + size). We only regenerate the email if the type is known.
+    await db.email_logs.update_one({"_id": log_id}, {"$set": {"status": "pending", "attempts": 0, "error": None}})
+    return {"message": "Requeued", "id": log_id, "to": row.get("to"), "type": row.get("type")}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# RENDER CRON ENDPOINTS — architecturally cleaner alternative to APScheduler.
+# Protected by `X-Cron-Secret` header matching SCHEDULER_SECRET env var.
+# Each hits `run_with_lock` so even accidental overlapping triggers are safe.
+# ═══════════════════════════════════════════════════════════════════
+def _check_cron_secret(request: Request) -> None:
+    if not SCHEDULER_SECRET:
+        raise HTTPException(503, "Cron endpoints disabled — SCHEDULER_SECRET not configured")
+    header = request.headers.get("x-cron-secret") or request.headers.get("X-Cron-Secret") or ""
+    if not secrets.compare_digest(header, SCHEDULER_SECRET):
+        raise HTTPException(401, "Invalid cron secret")
+
+
+@app.post("/api/cron/nightly-weights")
+async def cron_nightly_weights(request: Request):
+    _check_cron_secret(request)
+    ran = await run_with_lock("nightly_recompute_weights", _cron_recompute_weights, ttl_seconds=1200)
+    return {"ran": ran}
+
+
+@app.post("/api/cron/weekly-digest")
+async def cron_weekly_digest(request: Request):
+    _check_cron_secret(request)
+    ran = await run_with_lock("weekly_digest", _cron_weekly_digest, ttl_seconds=1800)
+    return {"ran": ran}
+
+
+@app.post("/api/cron/trending-refresh")
+async def cron_trending_refresh(request: Request):
+    _check_cron_secret(request)
+    ran = await run_with_lock("trending_refresh", _cron_trending_refresh, ttl_seconds=600)
+    return {"ran": ran}
+
+
+@app.post("/api/cron/streak-resets")
+async def cron_streak_resets(request: Request):
+    _check_cron_secret(request)
+    ran = await run_with_lock("streak_resets", _cron_streak_resets, ttl_seconds=600)
+    return {"ran": ran}

@@ -12,6 +12,7 @@ import {
   Zap, Activity, Target, ChevronRight, Flame, Trophy, Crown, Rocket, User,
   Medal, Users, BarChart3, Shield, Crosshair, Gauge, X
 } from 'lucide-react';
+import { ShareGuaranteeModal } from '@/components/ShareGuaranteeModal';
 
 interface SkillGap {
   skill: string; demand_count: number; total_jobs_requiring: number;
@@ -120,6 +121,7 @@ export default function StudentDashboard() {
   const [alerts, setAlerts] = useState<PredictiveAlert[]>([]);
   const [behaviorData, setBehaviorData] = useState<BehaviorData | null>(null);
   const [modelWeights, setModelWeights] = useState<ModelWeights | null>(null);
+  const [showShareModal, setShowShareModal] = useState(false);
 
   useEffect(() => { loadData(); }, []);
 
@@ -777,65 +779,26 @@ export default function StudentDashboard() {
               </div>
             )}
 
-            {/* Placement Guarantee share panel — public, shareable probability badge */}
+            {/* Placement Guarantee — single prominent Share Your Guarantee button */}
             {profile && (
               <div className="card-glow" data-testid="guarantee-share-panel">
                 <h3 className="text-xs font-semibold text-white mb-2 flex items-center gap-2">
                   <Shield className="w-3.5 h-3.5 text-[#00E5FF]" /> Placement Guarantee
                 </h3>
                 <p className="text-[11px] text-zinc-500 leading-relaxed mb-3">
-                  Share your verified UNIFY hire probability anywhere. Employers can see your
-                  live score without logging in — it refreshes every view from the current model.
+                  Share your UNIFY-verified placement profile. Employers see your live hire
+                  probability, verified skills, and certificates — no login required.
                 </p>
-                <div className="bg-black/40 rounded-md border border-zinc-800 px-2.5 py-2 mb-3">
-                  <code className="text-[10px] text-[#00E5FF] break-all font-mono" data-testid="guarantee-share-url">
-                    {typeof window !== 'undefined' ? window.location.origin : ''}/guarantee/{profile.user_id}
-                  </code>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    data-testid="guarantee-copy-btn"
-                    onClick={async () => {
-                      const url = `${window.location.origin}/guarantee/${profile.user_id}`;
-                      try {
-                        await navigator.clipboard.writeText(url);
-                        toast({ title: 'Guarantee link copied', description: 'Share it anywhere — employers see your live UNIFY score.' });
-                      } catch {
-                        toast({ title: 'Copy failed', description: url, variant: 'destructive' });
-                      }
-                    }}
-                    className="btn-secondary text-[10px] px-3 py-1.5"
-                  >
-                    COPY LINK
-                  </button>
-                  <a
-                    data-testid="guarantee-preview-btn"
-                    href={`/guarantee/${profile.user_id}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="btn-secondary text-[10px] px-3 py-1.5 inline-flex items-center gap-1"
-                  >
-                    PREVIEW ↗
-                  </a>
-                  <a
-                    data-testid="guarantee-linkedin-btn"
-                    href={`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(typeof window !== 'undefined' ? `${window.location.origin}/guarantee/${profile.user_id}` : '')}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="btn-secondary text-[10px] px-3 py-1.5"
-                  >
-                    LINKEDIN
-                  </a>
-                  <a
-                    data-testid="guarantee-twitter-btn"
-                    href={`https://twitter.com/intent/tweet?text=${encodeURIComponent("I'm UNIFY-verified — live hire probability at ")}${encodeURIComponent(typeof window !== 'undefined' ? `${window.location.origin}/guarantee/${profile.user_id}` : '')}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="btn-secondary text-[10px] px-3 py-1.5"
-                  >
-                    X / TWITTER
-                  </a>
-                </div>
+                <button
+                  data-testid="share-guarantee-btn"
+                  onClick={() => setShowShareModal(true)}
+                  className="w-full btn-primary text-xs py-2.5 flex items-center justify-center gap-2"
+                >
+                  <Shield className="w-3.5 h-3.5" /> SHARE YOUR GUARANTEE
+                </button>
+                <p className="text-[10px] font-mono text-zinc-600 mt-2 text-center">
+                  COPY · LINKEDIN · WHATSAPP · X
+                </p>
               </div>
             )}
           </div>
@@ -922,6 +885,16 @@ export default function StudentDashboard() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ═══ SHARE YOUR GUARANTEE MODAL ═══ */}
+      {profile && (
+        <ShareGuaranteeModal
+          userId={profile.user_id}
+          displayName={user?.name}
+          open={showShareModal}
+          onClose={() => setShowShareModal(false)}
+        />
       )}
     </div>
   );

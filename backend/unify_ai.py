@@ -8,14 +8,13 @@ Priority order:
   1. Anthropic Claude 3.5 Sonnet (primary)
   2. OpenAI GPT-4o          (fallback 1)
   3. Google Gemini 2.0      (fallback 2)
-  4. UNIFY_AI_KEY universal (fallback 3 — via emergentintegrations SDK,
-                             routes to OpenAI/Anthropic under the hood).
+  4. UNIFY_AI_KEY universal (fallback 3 — proxy key, routes to OpenAI/Anthropic).
 
 Environment variables (all optional; router skips missing ones):
   ANTHROPIC_API_KEY, ANTHROPIC_MODEL
   OPENAI_API_KEY,    OPENAI_MODEL
   GEMINI_API_KEY,    GEMINI_MODEL
-  UNIFY_AI_KEY       (renamed from EMERGENT_LLM_KEY; same value)
+  UNIFY_AI_KEY       (universal proxy key)
 """
 from __future__ import annotations
 
@@ -31,8 +30,7 @@ logger = logging.getLogger("unify.ai")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-# Backward-compat: accept old name
-UNIFY_AI_KEY = (os.getenv("UNIFY_AI_KEY") or os.getenv("EMERGENT_LLM_KEY") or "").strip()
+UNIFY_AI_KEY = os.getenv("UNIFY_AI_KEY", "").strip()
 
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")

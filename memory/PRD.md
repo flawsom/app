@@ -91,9 +91,9 @@ Auth · Profile · Jobs · Applications · AI Features · Hiring Probability & M
 - Database: MongoDB Atlas
 
 ## Live
-- Sandbox: https://d05df258-794d-40a2-aa7d-572976d7c22f.preview.emergentagent.com
+- Sandbox: https://unify-seal.preview.emergentagent.com
 - Production: https://www.unifies.codes
-- **Public Placement Guarantee demo:** https://d05df258-794d-40a2-aa7d-572976d7c22f.preview.emergentagent.com/guarantee/69e6cd1b8cb31eb88b9a40ef
+- **Public Placement Guarantee demo:** https://unify-seal.preview.emergentagent.com/guarantee/69e6cd1b8cb31eb88b9a40ef
 
 ## Dependencies added this session
 - `apscheduler>=3.11` (nightly weight recomputation)

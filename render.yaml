@@ -1,8 +1,19 @@
 # ─────────────────────────────────────────────────────────────
 # UNIFY — Render deployment blueprint
 # Domain: https://backend.unifies.codes
-# Do NOT commit real secret values. All `sync: false` keys must be
-# set in the Render Dashboard → Environment Variables.
+#
+# Architecture
+# ─────────────
+#   • web service         : FastAPI backend (APScheduler + Mongo-lock)
+#   • cron services       : Render Cron Jobs hit dedicated internal
+#                            endpoints protected by X-Cron-Secret.
+#                            APScheduler still runs as a fallback but
+#                            jobs are idempotent via scheduler_locks.
+#
+# Notes:
+#   • Do NOT commit real secret values. All `sync: false` keys must be
+#     set in the Render Dashboard → Environment Variables.
+#   • MongoDB Atlas is the system of record (scheduler_locks TTL-indexed).
 # ─────────────────────────────────────────────────────────────
 services:
   - type: web
@@ -34,6 +45,8 @@ services:
 
       # ── Security ──
       - key: JWT_SECRET
+        generateValue: true
+      - key: SCHEDULER_SECRET
         generateValue: true
 
       # ── Admin & Demo accounts ──
@@ -99,3 +112,63 @@ services:
         sync: false
       - key: SENTRY_TRACES_SAMPLE_RATE
         value: "0.1"
+
+  # ─── Cron Jobs — architecturally clean alternative to APScheduler ───
+  # Each hits an internal endpoint guarded by X-Cron-Secret + Mongo lock.
+
+  - type: cron
+    name: unify-cron-nightly-weights
+    runtime: python
+    region: oregon
+    plan: starter
+    schedule: "0 2 * * *"          # 02:00 UTC daily
+    buildCommand: ""
+    startCommand: |
+      curl -sS -X POST \
+        -H "X-Cron-Secret: $SCHEDULER_SECRET" \
+        https://backend.unifies.codes/api/cron/nightly-weights
+    envVars:
+      - key: SCHEDULER_SECRET
+        sync: false
+
+  - type: cron
+    name: unify-cron-weekly-digest
+    runtime: python
+    region: oregon
+    plan: starter
+    schedule: "0 9 * * 1"          # Mondays 09:00 UTC
+    startCommand: |
+      curl -sS -X POST \
+        -H "X-Cron-Secret: $SCHEDULER_SECRET" \
+        https://backend.unifies.codes/api/cron/weekly-digest
+    envVars:
+      - key: SCHEDULER_SECRET
+        sync: false
+
+  - type: cron
+    name: unify-cron-trending-refresh
+    runtime: python
+    region: oregon
+    plan: starter
+    schedule: "15 * * * *"         # hourly at :15
+    startCommand: |
+      curl -sS -X POST \
+        -H "X-Cron-Secret: $SCHEDULER_SECRET" \
+        https://backend.unifies.codes/api/cron/trending-refresh
+    envVars:
+      - key: SCHEDULER_SECRET
+        sync: false
+
+  - type: cron
+    name: unify-cron-streak-resets
+    runtime: python
+    region: oregon
+    plan: starter
+    schedule: "5 0 * * *"          # 00:05 UTC daily
+    startCommand: |
+      curl -sS -X POST \
+        -H "X-Cron-Secret: $SCHEDULER_SECRET" \
+        https://backend.unifies.codes/api/cron/streak-resets
+    envVars:
+      - key: SCHEDULER_SECRET
+        sync: false

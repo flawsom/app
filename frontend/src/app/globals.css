@@ -300,6 +300,13 @@ select.input-field {
 .hero-card-2 { animation: heroSlideRight 0.7s cubic-bezier(0.16, 1, 0.3, 1) 0.65s both; }
 .hero-card-3 { animation: heroSlideRight 0.7s cubic-bezier(0.16, 1, 0.3, 1) 0.8s both; }
 
+
+/* ═══ SKELETON LOADERS ═══ */
+@keyframes unify-skeleton-sweep {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
 @keyframes shimmer {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
@@ -307,8 +314,7 @@ select.input-field {
 .animate-shimmer {
   background: linear-gradient(90deg, transparent 30%, rgba(0,229,255,0.08) 50%, transparent 70%);
   background-size: 200% 100%;
-  animation: shimmer 3s linear infinite;
-}
+  animation: shimmer 3s linear infinite;}
 
 @keyframes grid-pulse {
   0%, 100% { opacity: 0.03; }

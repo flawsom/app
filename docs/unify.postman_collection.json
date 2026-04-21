@@ -2,11 +2,11 @@
   "info": {
     "_postman_id": "c5f8c2d1-9e21-4a3b-b8a6-c17c6be4b3f4",
     "name": "UNIFY API",
-    "description": "Complete UNIFY API collection — auth, jobs, applications, AI features, hiring probability, model weights, employer, analytics, certificates, public endpoints.\n\nSet collection variables:\n- `base_url` = https://d05df258-794d-40a2-aa7d-572976d7c22f.preview.emergentagent.com (sandbox) OR https://www.unifies.codes (prod)\n- `student_email`, `student_password`\n- `employer_email`, `employer_password`\n- `admin_email`, `admin_password`\n\nLog in first — the login request stores `access_token` automatically.",
+    "description": "Complete UNIFY API collection — auth, jobs, applications, AI features, hiring probability, model weights, employer, analytics, certificates, public endpoints.\n\nSet collection variables:\n- `base_url` = https://unify-seal.preview.emergentagent.com (sandbox) OR https://www.unifies.codes (prod)\n- `student_email`, `student_password`\n- `employer_email`, `employer_password`\n- `admin_email`, `admin_password`\n\nLog in first — the login request stores `access_token` automatically.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "base_url", "value": "https://d05df258-794d-40a2-aa7d-572976d7c22f.preview.emergentagent.com" },
+    { "key": "base_url", "value": "https://unify-seal.preview.emergentagent.com" },
     { "key": "student_email", "value": "student@unifies.codes" },
     { "key": "student_password", "value": "student-demo-2026" },
     { "key": "employer_email", "value": "employer@unifies.codes" },
