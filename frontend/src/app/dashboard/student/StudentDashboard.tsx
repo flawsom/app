@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { api, apiPost, apiPut } from '@/lib/api';
+import { toast } from '@/hooks/use-toast';
 import { Application, Recommendation, Certificate, Job } from '@/types';
 import {
   Brain, Briefcase, FileText, Award, Star, MapPin, Clock, ArrowRight,
@@ -773,6 +774,68 @@ export default function StudentDashboard() {
                 {profileStrength.suggestions.length > 0 && (
                   <div className="mt-3 pt-3 border-t border-zinc-800"><span className="text-[9px] font-mono text-[#EAB308]">SUGGESTIONS</span>{profileStrength.suggestions.map((s, i) => <p key={i} className="text-[10px] text-zinc-500 mt-1">- {s}</p>)}</div>
                 )}
+              </div>
+            )}
+
+            {/* Placement Guarantee share panel — public, shareable probability badge */}
+            {profile && (
+              <div className="card-glow" data-testid="guarantee-share-panel">
+                <h3 className="text-xs font-semibold text-white mb-2 flex items-center gap-2">
+                  <Shield className="w-3.5 h-3.5 text-[#00E5FF]" /> Placement Guarantee
+                </h3>
+                <p className="text-[11px] text-zinc-500 leading-relaxed mb-3">
+                  Share your verified UNIFY hire probability anywhere. Employers can see your
+                  live score without logging in — it refreshes every view from the current model.
+                </p>
+                <div className="bg-black/40 rounded-md border border-zinc-800 px-2.5 py-2 mb-3">
+                  <code className="text-[10px] text-[#00E5FF] break-all font-mono" data-testid="guarantee-share-url">
+                    {typeof window !== 'undefined' ? window.location.origin : ''}/guarantee/{profile.user_id}
+                  </code>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    data-testid="guarantee-copy-btn"
+                    onClick={async () => {
+                      const url = `${window.location.origin}/guarantee/${profile.user_id}`;
+                      try {
+                        await navigator.clipboard.writeText(url);
+                        toast({ title: 'Guarantee link copied', description: 'Share it anywhere — employers see your live UNIFY score.' });
+                      } catch {
+                        toast({ title: 'Copy failed', description: url, variant: 'destructive' });
+                      }
+                    }}
+                    className="btn-secondary text-[10px] px-3 py-1.5"
+                  >
+                    COPY LINK
+                  </button>
+                  <a
+                    data-testid="guarantee-preview-btn"
+                    href={`/guarantee/${profile.user_id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn-secondary text-[10px] px-3 py-1.5 inline-flex items-center gap-1"
+                  >
+                    PREVIEW ↗
+                  </a>
+                  <a
+                    data-testid="guarantee-linkedin-btn"
+                    href={`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(typeof window !== 'undefined' ? `${window.location.origin}/guarantee/${profile.user_id}` : '')}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn-secondary text-[10px] px-3 py-1.5"
+                  >
+                    LINKEDIN
+                  </a>
+                  <a
+                    data-testid="guarantee-twitter-btn"
+                    href={`https://twitter.com/intent/tweet?text=${encodeURIComponent("I'm UNIFY-verified — live hire probability at ")}${encodeURIComponent(typeof window !== 'undefined' ? `${window.location.origin}/guarantee/${profile.user_id}` : '')}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn-secondary text-[10px] px-3 py-1.5"
+                  >
+                    X / TWITTER
+                  </a>
+                </div>
               </div>
             )}
           </div>

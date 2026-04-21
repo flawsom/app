@@ -44,13 +44,13 @@ export default function LoginPage() {
             <Zap className="w-6 h-6 text-[var(--cyan)]" />
           </div>
           <h2 className="text-4xl font-black tracking-tighter mb-4 leading-[0.95]">
-            Welcome<br />back<span style={{color:'var(--cyan)'}}>.</span>
+            {(() => { const w = t('auth.welcomeBack') || 'Welcome back'; const [a, ...rest] = w.split(' '); return (<>{a}<br />{rest.join(' ') || ''}<span style={{color:'var(--cyan)'}}>.</span></>); })()}
           </h2>
           <p className="text-[var(--text-secondary)] leading-relaxed text-sm">
-            The system remembers. Your adaptive dashboard awaits.
+            {t('auth.welcomeCopy') || 'The system remembers. Your adaptive dashboard awaits.'}
           </p>
           <div className="mt-12 space-y-4">
-            {['Real-time feedback loops', 'AI-powered matching', 'Verified credentials'].map((item, i) => (
+            {[t('auth.bullet1') || 'Real-time feedback loops', t('auth.bullet2') || 'AI-powered matching', t('auth.bullet3') || 'Verified credentials'].map((item, i) => (
               <div key={i} className="flex items-center gap-3 text-[var(--text-secondary)] text-sm animate-fade-in" style={{ animationDelay: `${i * 0.15}s` }}>
                 <span className="status-dot status-dot-active" />
                 <span>{item}</span>
@@ -64,37 +64,37 @@ export default function LoginPage() {
       <div className="flex-1 flex items-center justify-center p-6 md:p-10">
         <div className="w-full max-w-sm">
           <button onClick={() => router.push('/')} className="flex items-center gap-1.5 text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] mb-10 transition-colors" data-testid="login-back-btn">
-            <ArrowLeft className="w-3.5 h-3.5" /> Back
+            <ArrowLeft className="w-3.5 h-3.5" /> {t('common.back') || 'Back'}
           </button>
-          <h1 className="text-3xl font-black tracking-tighter mb-1">Sign in</h1>
-          <p className="text-[var(--text-muted)] text-sm mb-8">Enter your credentials</p>
+          <h1 className="text-3xl font-black tracking-tighter mb-1">{t('auth.signIn') || 'Sign in'}</h1>
+          <p className="text-[var(--text-muted)] text-sm mb-8">{t('auth.enterCredentials') || 'Enter your credentials'}</p>
 
           {error && <div className="badge-error p-3 mb-6 text-xs rounded-md" data-testid="login-error">{error}</div>}
 
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <label className="block text-[10px] font-mono text-[var(--text-muted)] mb-2 uppercase tracking-wider">Email</label>
+              <label className="block text-[10px] font-mono text-[var(--text-muted)] mb-2 uppercase tracking-wider">{t('auth.email') || 'Email'}</label>
               <input type="email" value={email} onChange={e => setEmail(e.target.value)}
                 className="input-field py-3" placeholder="you@example.com" required data-testid="login-email-input" />
             </div>
             <div>
-              <label className="block text-[10px] font-mono text-[var(--text-muted)] mb-2 uppercase tracking-wider">Password</label>
+              <label className="block text-[10px] font-mono text-[var(--text-muted)] mb-2 uppercase tracking-wider">{t('auth.password') || 'Password'}</label>
               <div className="relative">
                 <input type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)}
-                  className="input-field py-3 pr-10" placeholder="Enter password" required data-testid="login-password-input" />
+                  className="input-field py-3 pr-10" placeholder={t('auth.enterPassword') || 'Enter password'} required data-testid="login-password-input" />
                 <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-secondary)]">
                   {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
             </div>
             <button type="submit" disabled={loading} className="btn-primary w-full py-3 disabled:opacity-30" data-testid="login-submit-btn">
-              {loading ? 'AUTHENTICATING...' : 'SIGN IN'}
+              {loading ? (t('auth.authenticating') || 'AUTHENTICATING...') : (t('auth.signIn') || 'SIGN IN').toUpperCase()}
             </button>
           </form>
 
           <div className="relative my-6">
             <div className="absolute inset-0 flex items-center"><div className="w-full border-t" style={{ borderColor: 'var(--border-subtle)' }} /></div>
-            <div className="relative flex justify-center"><span className="px-3 text-[10px] font-mono text-[var(--text-muted)]" style={{ background: 'var(--bg-void)' }}>OR</span></div>
+            <div className="relative flex justify-center"><span className="px-3 text-[10px] font-mono text-[var(--text-muted)]" style={{ background: 'var(--bg-void)' }}>{t('auth.orContinueWith') || 'OR'}</span></div>
           </div>
 
           <GoogleSignInButton
@@ -104,10 +104,10 @@ export default function LoginPage() {
           />
 
           <p className="mt-6 text-xs text-[var(--text-muted)] text-center">
-            No account?{' '}
-            <button onClick={() => router.push('/register')} className="text-[var(--cyan)] font-medium hover:underline" data-testid="login-register-link">Create one</button>
+            {t('auth.noAccount') || 'No account?'}{' '}
+            <button onClick={() => router.push('/register')} className="text-[var(--cyan)] font-medium hover:underline" data-testid="login-register-link">{t('auth.createOne') || 'Create one'}</button>
             {' / '}
-            <button onClick={() => router.push('/forgot-password')} className="text-[var(--text-secondary)] hover:underline" data-testid="login-forgot-link">Reset</button>
+            <button onClick={() => router.push('/forgot-password')} className="text-[var(--text-secondary)] hover:underline" data-testid="login-forgot-link">{t('auth.resetLink') || 'Reset'}</button>
           </p>
         </div>
       </div>

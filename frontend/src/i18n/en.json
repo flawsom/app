@@ -45,7 +45,14 @@
     "student": "Student",
     "mentor": "Mentor",
     "employer": "Employer",
-    "placement": "Placement Officer"
+    "placement": "Placement Officer",
+    "welcomeBack": "Welcome back",
+    "welcomeCopy": "The system remembers. Your adaptive dashboard awaits.",
+    "bullet1": "Real-time feedback loops",
+    "bullet2": "AI-powered matching",
+    "bullet3": "Verified credentials",
+    "enterPassword": "Enter password",
+    "resetLink": "Reset"
   },
   "nav": {
     "commandCenter": "Command Center",

@@ -16,6 +16,14 @@ load_dotenv()
 
 from unify_logger import setup_logger
 from unify_ai import generate as ai_generate, extract_json as ai_extract_json, providers_status as ai_providers_status, UnifyAIError
+from unify_email import (
+    send_email as email_send,
+    welcome_email,
+    application_submitted_email,
+    employer_new_application_email,
+    application_status_email,
+    certificate_issued_email,
+)
 from unify_ratelimit import check_and_increment, record_tokens
 from unify_integrations import search_jobs_live, jsearch_search, company_logo_url, providers_status as integrations_status
 
@@ -361,7 +369,32 @@ async def lifespan(app):
 
 
 async def _cron_recompute_weights():
-    """Cron-invoked version of /api/model/recompute-weights. No auth; internal job."""
+    """Cron-invoked version of /api/model/recompute-weights.
+    No auth. Multi-replica safe via a Mongo-based leader lock (only one replica per window wins).
+    """
+    # Leader-election: claim a lock doc valid for 20 minutes. If another replica has claimed
+    # within that window, skip. This keeps behaviour correct on Render free/starter (single replica)
+    # AND on multi-replica setups without needing Redis.
+    lock_key = "cron_nightly_recompute"
+    now = datetime.now(timezone.utc)
+    lock_expiry = (now + timedelta(minutes=20)).isoformat()
+    try:
+        # Upsert only if no lock or existing lock expired
+        res = await db.cron_locks.find_one_and_update(
+            {"_id": lock_key, "$or": [{"expires_at": {"$lt": now.isoformat()}}, {"expires_at": {"$exists": False}}]},
+            {"$set": {"_id": lock_key, "acquired_at": now.isoformat(), "expires_at": lock_expiry, "holder": os.getenv("HOSTNAME", "local")}},
+            upsert=True,
+            return_document=True,
+        )
+        # If the returned doc was claimed by someone else within the window, its acquired_at != now.
+        if res and res.get("acquired_at") and res["acquired_at"] != now.isoformat():
+            logger.info("cron_recompute_skipped", extra={"reason": "lock_held", "holder": res.get("holder")})
+            return
+    except Exception as e:  # noqa: BLE001
+        # If the lock doc already exists (race), the upsert-on-filter returns None — just move on.
+        # We prefer "false positive skipped run" over "double run".
+        logger.info("cron_lock_contested", extra={"error": str(e)[:200]})
+        return
     try:
         outcomes = await db.hiring_outcomes.find({}).to_list(5000)
         if not outcomes:
@@ -384,10 +417,10 @@ async def _cron_recompute_weights():
         shifted = {k: max(0.0, scores[k] / n_valid + DEFAULT_WEIGHTS[k]) for k in DEFAULT_WEIGHTS}
         total = sum(shifted.values()) or 1.0
         new_weights = {k: round(v / total, 4) for k, v in shifted.items()}
-        now = datetime.now(timezone.utc).isoformat()
+        now_iso = now.isoformat()
         await db.model_weights.update_one(
             {"_id": "global"},
-            {"$set": {**new_weights, "outcomes_processed": n_valid, "version": n_valid, "updated_at": now, "recomputed_at": now, "recomputed_by": "cron"}},
+            {"$set": {**new_weights, "outcomes_processed": n_valid, "version": n_valid, "updated_at": now_iso, "recomputed_at": now_iso, "recomputed_by": "cron"}},
             upsert=True,
         )
         _invalidate_mw_cache()
@@ -535,7 +568,13 @@ async def register(req: RegisterReq, response: Response, request: Request):
     access = create_access_token(uid, email); refresh = create_refresh_token(uid)
     set_auth_cookies(response, access, refresh)
     await audit_log(uid, "register", {"role": req.role}, request.client.host if request.client else None)
-    user_doc["_id"] = uid; user_doc["id"] = uid; user_doc.pop("password_hash", None); user_doc["access_token"] = access
+    # Welcome email (fire-and-forget)
+    try:
+        sub, html, text = welcome_email(req.name, req.role)
+        await email_send(email, sub, html, text)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("welcome_email_schedule_failed", extra={"error": str(e)[:200]})
+    user_doc["id"] = uid; user_doc.pop("_id", None); user_doc.pop("password_hash", None); user_doc["access_token"] = access
     return user_doc
 
 @app.post("/api/auth/login")
@@ -836,6 +875,29 @@ async def create_application(req: ApplicationCreate, request: Request):
     r = await db.applications.insert_one(doc); doc["id"] = str(r.inserted_id); doc.pop("_id", None)
     if mentor_id: await create_notification(mentor_id, "New Application", f"{user['name']} applied to {job['title']}", "info")
     if job.get("employer_user_id"): await create_notification(job["employer_user_id"], "New Application", f"Application for {job['title']}", "info")
+    # Emails: (1) student confirmation, (2) employer notification. Fire-and-forget.
+    try:
+        # Compute a live probability for the confirmation email so the number is real.
+        apps_count = await db.applications.count_documents({"student_id": user["id"]})
+        job_apps = await db.applications.count_documents({"job_id": req.job_id})
+        profile = await db.student_profiles.find_one({"user_id": user["id"]}) or {}
+        prob_result = await _compute_hire_probability(profile, job, apps_count, job_apps)
+        prob = prob_result.get("probability", 0.0)
+        sub, html, text = application_submitted_email(user.get("name", ""), job.get("title", ""), job.get("company_name", ""), prob)
+        await email_send(user["email"], sub, html, text)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("application_email_student_failed", extra={"error": str(e)[:200]})
+    try:
+        emp_uid = job.get("employer_user_id")
+        if emp_uid:
+            emp_user = await db.users.find_one({"_id": ObjectId(emp_uid)})
+            if emp_user and emp_user.get("email"):
+                skills_overlap = list(set(s.lower() for s in (profile.get("skills") or [])) & set(s.lower() for s in (job.get("required_skills") or [])))
+                fit = f"Matches {len(skills_overlap)} of {len(job.get('required_skills') or [])} required skills · UNIFY hire probability {int(prob*100)}%"
+                sub, html, text = employer_new_application_email(emp_user.get("name", ""), user.get("name", ""), job.get("title", ""), fit)
+                await email_send(emp_user["email"], sub, html, text)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("application_email_employer_failed", extra={"error": str(e)[:200]})
     await audit_log(user["id"], "apply", {"job_id": req.job_id})
     # Track behavior
     await db.behavior_events.insert_one({"user_id": user["id"], "event_type": "apply", "target": req.job_id, "created_at": now})
@@ -880,6 +942,14 @@ async def update_application_status(app_id: str, request: Request):
     app_doc = await db.applications.find_one({"_id": ObjectId(app_id)})
     if app_doc:
         await create_notification(app_doc["student_id"], f"Application {new_status.replace('_',' ').title()}", f"Your application for {app_doc.get('job_title','')} has been {new_status.replace('_',' ')}", "info")
+        # Email the student on any status change (selected / rejected / interview / shortlisted / under_review)
+        try:
+            student_user = await db.users.find_one({"_id": ObjectId(app_doc["student_id"])})
+            if student_user and student_user.get("email"):
+                sub, html, text = application_status_email(student_user.get("name", ""), app_doc.get("job_title", ""), app_doc.get("company_name", ""), new_status)
+                await email_send(student_user["email"], sub, html, text)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("status_email_failed", extra={"error": str(e)[:200]})
     await audit_log(user["id"], "update_app_status", {"app_id": app_id, "status": new_status})
     # Auto-learn on terminal outcomes
     if new_status in ("selected", "rejected") and app_doc:
@@ -914,6 +984,14 @@ async def employer_feedback(app_id: str, req: FeedbackReq, request: Request):
         cert["blockchain_hash"] = hashlib.sha256(json.dumps(cert, sort_keys=True).encode()).hexdigest()
         await db.certificates.insert_one(cert)
         await create_notification(app_doc["student_id"], "Certificate Issued", f"Certificate for {app_doc.get('job_title','')}", "success")
+        # Email the student with verify link
+        try:
+            student_user = await db.users.find_one({"_id": ObjectId(app_doc["student_id"])})
+            if student_user and student_user.get("email"):
+                sub, html, text = certificate_issued_email(student_user.get("name", ""), cert["title"], cert["blockchain_hash"])
+                await email_send(student_user["email"], sub, html, text)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("cert_email_failed", extra={"error": str(e)[:200]})
     return {"message": "Feedback submitted"}
 
 # ─── Recommendations ──────────────────────────────────────────────
