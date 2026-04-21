@@ -1402,30 +1402,108 @@ async def skill_gap_analysis(request: Request):
     return {"student_skills": list(student_skills), "total_skills": len(student_skills), "total_gaps": len(gap_details), "gaps": gap_details[:15], "skill_coverage": round(len(student_skills)/max(len(all_req),1)*100, 1)}
 
 # ─── Resume Upload ────────────────────────────────────────────────
-def _extract_resume_text(file_data_b64: str) -> str:
-    """Extract plain text from a base64-encoded PDF (or fall back for other types).
+def _extract_resume_text(file_data_b64: str, file_name: str = "") -> str:
+    """Extract plain text from a base64-encoded resume.
 
-    Returns an empty string if extraction fails — the profile auto-fill step will
-    simply skip AI parsing in that case.
+    Supports PDF (via `pypdf`) and DOCX (via `python-docx`). Auto-detects by
+    magic bytes first, then falls back to file extension. Returns "" on any
+    failure — the profile auto-fill step will skip AI parsing in that case.
     """
     try:
         raw = file_data_b64.split(",", 1)[-1] if "," in file_data_b64 else file_data_b64
         data = base64.b64decode(raw)
-        # PDF path (the common case — the frontend accepts .pdf/.doc/.docx).
-        from pypdf import PdfReader
-        reader = PdfReader(io.BytesIO(data))
-        pages = []
-        for page in reader.pages[:6]:  # cap at 6 pages
+        ext = (file_name or "").lower().rsplit(".", 1)[-1] if "." in (file_name or "") else ""
+        head = data[:4]
+        is_pdf = head == b"%PDF" or ext == "pdf"
+        # DOCX files are ZIP archives → start with PK\x03\x04
+        is_docx = head[:2] == b"PK" or ext in ("docx", "doc")
+
+        text = ""
+        if is_pdf:
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(data))
+            pages = []
+            for page in reader.pages[:8]:  # 8-page cap (resumes are rarely longer)
+                try:
+                    pages.append(page.extract_text() or "")
+                except Exception:
+                    continue
+            text = "\n".join(pages)
+        elif is_docx:
+            import docx  # python-docx
+            document = docx.Document(io.BytesIO(data))
+            parts = [p.text for p in document.paragraphs if p.text.strip()]
+            # Tables often contain structured experience — include them.
+            for tbl in document.tables:
+                for row in tbl.rows:
+                    parts.append(" | ".join(cell.text.strip() for cell in row.cells if cell.text.strip()))
+            text = "\n".join(parts)
+        else:
+            # Plain text fallback — try to decode as utf-8.
             try:
-                pages.append(page.extract_text() or "")
-            except Exception:  # noqa: BLE001
-                continue
-        text = "\n".join(pages).strip()
-        # Collapse whitespace for cleaner AI prompts + DB storage.
-        return re.sub(r"\s+\n", "\n", re.sub(r"[ \t]+", " ", text))[:15000]
+                text = data.decode("utf-8", errors="ignore")
+            except Exception:
+                text = ""
+        return re.sub(r"\s+\n", "\n", re.sub(r"[ \t]+", " ", text)).strip()[:15000]
     except Exception as e:  # noqa: BLE001
-        logger.warning("resume_extract_failed", extra={"error": str(e)[:200]})
+        logger.warning("resume_extract_failed", extra={"error": str(e)[:200], "file_name": file_name[:80]})
         return ""
+
+
+def _split_resume_sections(text: str) -> dict:
+    """Heuristic sectioniser for resume text.
+
+    Splits on common section headers (case-insensitive). Returns a dict with keys:
+    `summary`, `experience`, `education`, `projects`, `skills`, `other`.
+    Never raises. Sections capped at 2500 chars each for DB size.
+    """
+    if not text:
+        return {}
+    # Normalise bullet chars and collapse extra blank lines.
+    t = text.replace("•", "-").replace("·", "-").replace("●", "-")
+    # Section heading map — keys are canonical names, values list regex alternatives.
+    headings = {
+        "summary":    [r"summary", r"profile", r"about", r"objective"],
+        "experience": [r"experience", r"employment", r"work history", r"professional experience"],
+        "education":  [r"education", r"academic", r"academics", r"qualifications"],
+        "projects":   [r"projects", r"personal projects", r"selected projects"],
+        "skills":     [r"skills", r"technical skills", r"technologies"],
+        "certifications": [r"certifications?", r"certificates?", r"licenses?"],
+        "achievements": [r"achievements?", r"awards?", r"honors?"],
+    }
+    # Build master regex that captures section transitions.
+    pattern_parts = []
+    for canonical, alts in headings.items():
+        for alt in alts:
+            pattern_parts.append(rf"(?P<{canonical}_{alts.index(alt)}>(?mi)^\s*{alt}\s*:?\s*$)")
+    # Simpler: walk lines, mark heading lines.
+    lines = t.split("\n")
+    sections: dict = {}
+    current = "summary"  # preface before first heading
+    buf: list = []
+    heading_regexes = {
+        canonical: re.compile(rf"^\s*({'|'.join(alts)})\s*:?\s*$", re.IGNORECASE)
+        for canonical, alts in headings.items()
+    }
+    for line in lines:
+        matched = None
+        for canonical, rx in heading_regexes.items():
+            if rx.match(line):
+                matched = canonical
+                break
+        if matched:
+            if buf:
+                existing = sections.get(current, "")
+                sections[current] = (existing + "\n" + "\n".join(buf)).strip()[:2500]
+            current = matched
+            buf = []
+        else:
+            buf.append(line)
+    if buf:
+        existing = sections.get(current, "")
+        sections[current] = (existing + "\n" + "\n".join(buf)).strip()[:2500]
+    # Drop empty sections.
+    return {k: v for k, v in sections.items() if v and len(v) > 10}
 
 
 async def _ai_parse_resume(resume_text: str) -> dict:
@@ -1484,12 +1562,13 @@ async def upload_resume(request: Request):
     """Upload + parse + auto-fill profile from the resume in a single call.
 
     Flow:
-      1. Store the base64 PDF in `uploads`.
-      2. Extract plain text (pypdf).
-      3. Ask the AI router for structured fields.
-      4. Merge into `student_profiles` (never overwriting non-empty existing values
-         except for `resume_text`).
-      5. Return `parsed` so the frontend can show what changed.
+      1. Store the base64 file in `uploads`.
+      2. Extract plain text (pypdf for .pdf, python-docx for .docx).
+      3. Heuristic split into sections (summary/experience/education/projects/skills/...).
+      4. Ask the AI router for structured fields.
+      5. Merge into `student_profiles` (never overwriting non-empty existing values
+         except for `resume_text` and `resume_sections`).
+      6. Return `parsed` + `sections_found` so the frontend can show what changed.
     """
     user = await require_role("student")(request); body = await request.json()
     file_data = body.get("file_data", ""); file_name = body.get("file_name", "resume.pdf")
@@ -1501,14 +1580,17 @@ async def upload_resume(request: Request):
         upsert=True,
     )
     resume_url = f"/api/download/resume/{user['id']}"
-    # Extract + parse
-    extracted = _extract_resume_text(file_data)
+    # Extract + section + parse
+    extracted = _extract_resume_text(file_data, file_name)
+    sections = _split_resume_sections(extracted) if extracted else {}
     parsed = await _ai_parse_resume(extracted) if extracted else {}
     # Build merge update: never overwrite non-empty scalar fields the user already set.
     existing = await db.student_profiles.find_one({"user_id": user["id"]}) or {}
     update: dict = {"resume_url": resume_url}
     if extracted:
         update["resume_text"] = extracted[:6000]
+    if sections:
+        update["resume_sections"] = sections
     for k in ("first_name", "last_name", "bio", "phone", "linkedin_url", "github_url", "department"):
         if parsed.get(k) and not (existing.get(k) or "").strip():
             update[k] = parsed[k]
@@ -1525,13 +1607,20 @@ async def upload_resume(request: Request):
         full = f"{parsed.get('first_name','')} {parsed.get('last_name','')}".strip()
         if full:
             await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": {"name": full}})
-    await audit_log(user["id"], "resume_upload", {"file_name": file_name, "parsed_fields": list(parsed.keys())})
+    await audit_log(user["id"], "resume_upload", {
+        "file_name": file_name,
+        "parsed_fields": list(parsed.keys()),
+        "sections_found": list(sections.keys()),
+    })
     return {
         "message": "Resume uploaded",
         "file_name": file_name,
+        "file_type": "pdf" if file_name.lower().endswith(".pdf") else ("docx" if file_name.lower().endswith((".docx", ".doc")) else "other"),
         "parsed_fields": list(parsed.keys()),
         "parsed": parsed,
-        "auto_filled": {k: v for k, v in update.items() if k not in ("resume_url", "resume_text", "updated_at")},
+        "auto_filled": {k: v for k, v in update.items() if k not in ("resume_url", "resume_text", "resume_sections", "updated_at")},
+        "sections_found": list(sections.keys()),
+        "sections": {k: v[:400] for k, v in sections.items()},  # compact preview for toast
         "text_length": len(extracted),
     }
 
@@ -2309,6 +2398,164 @@ async def generate_cover_letter(request: Request):
     except Exception as e:
         logger.warning("cover_letter_fallback", extra={"error": str(e)[:200]})
         return {"cover_letter": f"Dear Hiring Manager,\n\nI am writing to express my interest in the {job['title']} position at {job.get('company_name','')}. With skills in {', '.join(skills[:3])}, I am confident I can contribute meaningfully to your team.\n\nBest regards,\n{user.get('name','')}", "job_title": job["title"], "company": job.get("company_name", ""), "ai_provider": "fallback_heuristic", "quota": quota}
+
+
+@app.post("/api/cover-letter/attribute")
+async def cover_letter_attribution(request: Request):
+    """Explain WHY each sentence of a cover letter was written — per-sentence
+    attribution linking claims to (a) resume skills, (b) resume sections, (c)
+    job requirements. This is the trust layer: students can audit AI output.
+
+    Body: {cover_letter: string, job_id: string}
+    Returns: {sentences: [{text, sources:[{type, value, evidence}]}]}
+    """
+    user = await get_current_user(request)
+    body = await request.json()
+    cover_letter = (body.get("cover_letter") or "").strip()
+    job_id = body.get("job_id") or ""
+    if not cover_letter or not job_id:
+        raise HTTPException(400, "cover_letter and job_id required")
+    try:
+        job = await db.job_postings.find_one({"_id": ObjectId(job_id)})
+    except Exception:
+        raise HTTPException(404, "Job not found")
+    if not job:
+        raise HTTPException(404, "Job not found")
+    profile = await db.student_profiles.find_one({"user_id": user["id"]}) or {}
+    sections = profile.get("resume_sections") or {}
+
+    # Split the letter into sentences. Preserve greeting / sign-off as their own units.
+    lines = [ln.strip() for ln in cover_letter.split("\n") if ln.strip()]
+    # Flatten bullets → sentences by splitting on ". " within each line.
+    sentences: list = []
+    for ln in lines:
+        if ln.lower().startswith(("dear ", "hi ", "hello ")) or ln.lower().startswith("best regards") or ln.lower().startswith("sincerely"):
+            sentences.append(ln)
+            continue
+        parts = re.split(r"(?<=[.!?])\s+", ln)
+        sentences.extend([p for p in parts if p.strip()])
+    sentences = [s for s in sentences if len(s) > 2][:30]
+
+    try:
+        ai = await ai_generate(
+            system=(
+                "You are an auditor of AI-generated cover letters. For each sentence, "
+                "identify which concrete facts from the candidate's profile or the job "
+                "posting support it. Respond with JSON ONLY. "
+                "Schema: {\"attributions\": [{\"sentence\": string, \"sources\": ["
+                "{\"type\": \"skill\"|\"experience\"|\"education\"|\"project\"|\"job_requirement\"|\"company\"|\"greeting\"|\"generic\", "
+                "\"value\": string, \"evidence\": string (quote from source, max 120 chars)}]}]}. "
+                "If a sentence is boilerplate/generic (greeting, sign-off, filler), type='generic' with evidence=''. "
+                "Never invent evidence not present in the inputs."
+            ),
+            prompt=(
+                "CANDIDATE SKILLS: " + ", ".join((profile.get("skills") or [])[:20]) + "\n\n"
+                "CANDIDATE BIO: " + (profile.get("bio", "") or "")[:300] + "\n\n"
+                "RESUME SECTIONS:\n" + "\n".join(f"[{k}] {v[:400]}" for k, v in sections.items()) + "\n\n"
+                "JOB TITLE: " + job.get("title", "") + "\n"
+                "COMPANY: " + job.get("company_name", "") + "\n"
+                "JOB REQUIREMENTS: " + ", ".join(job.get("required_skills") or []) + "\n"
+                "JOB DESCRIPTION: " + (job.get("description", "") or "")[:800] + "\n\n"
+                "SENTENCES TO ATTRIBUTE:\n" + "\n".join(f"{i+1}. {s}" for i, s in enumerate(sentences)) + "\n\n"
+                "Return JSON now:"
+            ),
+            session_id=f"attr-{user['id']}-{job_id}",
+            max_tokens=1800,
+        )
+        parsed = ai_extract_json(ai.get("text", "")) or {}
+        attributions = parsed.get("attributions") or []
+        # Coerce + sanitise so frontend gets a stable shape.
+        clean: list = []
+        for idx, item in enumerate(attributions):
+            if not isinstance(item, dict):
+                continue
+            sent = (item.get("sentence") or (sentences[idx] if idx < len(sentences) else "")).strip()
+            sources = item.get("sources") or []
+            if not isinstance(sources, list):
+                sources = []
+            clean_sources: list = []
+            for src in sources[:5]:
+                if not isinstance(src, dict):
+                    continue
+                clean_sources.append({
+                    "type": str(src.get("type", "generic"))[:30],
+                    "value": str(src.get("value", ""))[:120],
+                    "evidence": str(src.get("evidence", ""))[:240],
+                })
+            clean.append({"sentence": sent, "sources": clean_sources})
+        # If AI returned nothing usable, create a minimal fallback.
+        if not clean:
+            clean = [{"sentence": s, "sources": [{"type": "generic", "value": "", "evidence": ""}]} for s in sentences]
+        return {
+            "sentences": clean,
+            "sentence_count": len(clean),
+            "ai_provider": ai.get("provider", "unknown"),
+            "generic_count": sum(1 for s in clean if all(src.get("type") == "generic" for src in s.get("sources", []))),
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.warning("cover_letter_attribution_failed", extra={"error": str(e)[:200]})
+        return {
+            "sentences": [{"sentence": s, "sources": [{"type": "generic", "value": "", "evidence": ""}]} for s in sentences],
+            "sentence_count": len(sentences),
+            "ai_provider": "fallback",
+            "generic_count": len(sentences),
+            "error": "AI attribution unavailable — showing raw sentences",
+        }
+
+
+@app.post("/api/applications/{app_id}/regenerate-cover-letter")
+async def regenerate_application_cover_letter(app_id: str, request: Request):
+    """Regenerate and persist a tailored cover letter for an existing application.
+
+    Replaces the stored `cover_letter` and sets `cover_letter_source` to
+    `ai:<provider>:regenerated`. Student-only; must own the application.
+    """
+    user = await require_role("student")(request)
+    try:
+        app_doc = await db.applications.find_one({"_id": ObjectId(app_id)})
+    except Exception:
+        raise HTTPException(404, "Application not found")
+    if not app_doc:
+        raise HTTPException(404, "Application not found")
+    if app_doc.get("student_id") != user["id"]:
+        raise HTTPException(403, "Not your application")
+    quota = await check_and_increment(db, user, "cover-letter")
+    try:
+        job = await db.job_postings.find_one({"_id": ObjectId(app_doc["job_id"])})
+    except Exception:
+        raise HTTPException(404, "Job not found")
+    if not job:
+        raise HTTPException(404, "Job not found")
+    profile = await db.student_profiles.find_one({"user_id": user["id"]}) or {}
+    skills = profile.get("skills", []) or []
+    try:
+        ai = await ai_generate(
+            system="You are an expert career advisor. Write concise, specific, sincere cover letters with zero placeholder text, zero brackets, and zero generic phrases. Every line references concrete skills, the company, or the role.",
+            prompt=(
+                f"Write a 180-word cover letter for {user.get('name','the candidate')} "
+                f"applying to {job.get('title','')} at {job.get('company_name','')}.\n"
+                f"Candidate skills: {', '.join(skills[:10]) or 'not specified'}.\n"
+                f"Candidate bio: {(profile.get('bio') or '')[:300] or 'not specified'}.\n"
+                f"Candidate department: {profile.get('department') or 'not specified'}.\n"
+                f"Required skills for role: {', '.join((job.get('required_skills') or [])[:10]) or 'not specified'}.\n"
+                f"Job description: {(job.get('description') or '')[:600]}\n\n"
+                "Open with a specific hook tied to the company or role. End with 'Best regards,' and the candidate's full name."
+            ),
+            session_id=f"regen-cl-{user['id']}-{app_id}",
+            max_tokens=600,
+        )
+        new_cl = (ai.get("text") or "").strip()
+        source = f"ai:{ai.get('provider','unknown')}:regenerated"
+        await record_tokens(db, user, "cover-letter", tokens_estimated=len(new_cl) // 4, provider=ai.get("provider", ""))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("regenerate_cover_letter_failed", extra={"error": str(e)[:200]})
+        raise HTTPException(503, "AI unavailable — try again in a moment")
+    await db.applications.update_one(
+        {"_id": ObjectId(app_id)},
+        {"$set": {"cover_letter": new_cl, "cover_letter_source": source,
+                   "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return {"cover_letter": new_cl, "cover_letter_source": source, "quota": quota}
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -76,6 +76,7 @@ export interface Application {
   job_title?: string;
   company_name?: string;
   cover_letter?: string;
+  cover_letter_source?: string;
   status: string;
   mentor_approval_status: string;
   mentor_comments?: string;

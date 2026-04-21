@@ -122,6 +122,11 @@ export default function StudentDashboard() {
   const [behaviorData, setBehaviorData] = useState<BehaviorData | null>(null);
   const [modelWeights, setModelWeights] = useState<ModelWeights | null>(null);
   const [showShareModal, setShowShareModal] = useState(false);
+  // Cover letter trust UI state
+  const [clExpandedAppId, setClExpandedAppId] = useState<string | null>(null);
+  const [clRegenLoading, setClRegenLoading] = useState<string | null>(null);
+  const [clAttribution, setClAttribution] = useState<Record<string, any>>({});
+  const [clAttrLoading, setClAttrLoading] = useState<string | null>(null);
 
   useEffect(() => { loadData(); }, []);
 
@@ -228,6 +233,34 @@ export default function StudentDashboard() {
     if (profile?.resume_url) {
       setShowResume(true);
     }
+  };
+
+  // ─── Cover letter trust controls ────────────────────────────────
+  const regenerateCoverLetter = async (appId: string) => {
+    setClRegenLoading(appId);
+    try {
+      const res: any = await apiPost(`/api/applications/${appId}/regenerate-cover-letter`, {});
+      // Update the application list in-place so the UI reflects the new letter.
+      setApplications(prev => prev.map(a => a.id === appId ? { ...a, cover_letter: res.cover_letter, cover_letter_source: res.cover_letter_source } : a));
+      // Invalidate any cached attribution for this application.
+      setClAttribution(prev => { const next = { ...prev }; delete next[appId]; return next; });
+      toast({ title: 'Cover letter regenerated', description: `Source: ${res.cover_letter_source}` });
+    } catch (err: any) {
+      toast({ title: 'Regenerate failed', description: err.message || 'Try again.', variant: 'destructive' });
+    }
+    setClRegenLoading(null);
+  };
+
+  const loadAttribution = async (appId: string, coverLetter: string, jobId: string) => {
+    if (clAttribution[appId]) return;
+    setClAttrLoading(appId);
+    try {
+      const res: any = await apiPost('/api/cover-letter/attribute', { cover_letter: coverLetter, job_id: jobId });
+      setClAttribution(prev => ({ ...prev, [appId]: res }));
+    } catch (err: any) {
+      toast({ title: 'Attribution unavailable', description: err.message || 'Try again.', variant: 'destructive' });
+    }
+    setClAttrLoading(null);
   };
 
   const getHireProbability = async (jobId: string) => {
@@ -591,21 +624,120 @@ export default function StudentDashboard() {
       {tab === 'applications' && (
         <div>
           {applications.length === 0 ? <p className="text-zinc-700 text-center py-12 font-mono text-xs">NO APPLICATIONS YET</p> : (
-            <div className="overflow-x-auto">
-              <table className="data-table" data-testid="applications-table">
-                <thead><tr><th>Position</th><th>Company</th><th>Status</th><th>Mentor</th><th>Applied</th></tr></thead>
-                <tbody>
-                  {applications.map(a => (
-                    <tr key={a.id} data-testid={`app-row-${a.id}`}>
-                      <td className="font-medium text-white">{a.job_title}</td>
-                      <td>{a.company_name}</td>
-                      <td><span className={`text-[10px] px-1.5 py-0.5 font-mono ${a.status === 'selected' ? 'badge-success' : a.status === 'rejected' ? 'badge-error' : a.status === 'shortlisted' ? 'badge-info' : 'badge-warning'}`}>{a.status.replace(/_/g, ' ').toUpperCase()}</span></td>
-                      <td><span className={`text-[10px] px-1.5 py-0.5 font-mono ${a.mentor_approval_status === 'approved' ? 'badge-success' : a.mentor_approval_status === 'rejected' ? 'badge-error' : 'badge-warning'}`}>{a.mentor_approval_status.toUpperCase()}</span></td>
-                      <td className="text-zinc-600 text-xs font-mono">{new Date(a.applied_at).toLocaleDateString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="space-y-2" data-testid="applications-list">
+              {applications.map(a => {
+                const expanded = clExpandedAppId === a.id;
+                const src = (a as any).cover_letter_source as string | undefined;
+                const isAI = src && src.startsWith('ai:');
+                const isUser = src === 'user_provided';
+                const isFallback = src === 'fallback_heuristic';
+                const attr = clAttribution[a.id];
+                return (
+                  <div key={a.id} className="card" data-testid={`app-row-${a.id}`}>
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div className="flex-1 min-w-[200px]">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="font-medium text-white text-sm">{a.job_title}</h3>
+                          <span className="text-[10px] text-zinc-500">· {a.company_name}</span>
+                        </div>
+                        <div className="flex items-center gap-2 mt-2 flex-wrap">
+                          <span className={`text-[9px] px-1.5 py-0.5 font-mono rounded-sm ${a.status === 'selected' ? 'badge-success' : a.status === 'rejected' ? 'badge-error' : a.status === 'shortlisted' ? 'badge-info' : 'badge-warning'}`}>{a.status.replace(/_/g, ' ').toUpperCase()}</span>
+                          <span className={`text-[9px] px-1.5 py-0.5 font-mono rounded-sm ${a.mentor_approval_status === 'approved' ? 'badge-success' : a.mentor_approval_status === 'rejected' ? 'badge-error' : 'badge-warning'}`}>MENTOR: {a.mentor_approval_status.toUpperCase()}</span>
+                          {isAI && (
+                            <span className="text-[9px] px-1.5 py-0.5 font-mono rounded-sm bg-[#00E5FF]/10 text-[#00E5FF] border border-[#00E5FF]/30 inline-flex items-center gap-1" data-testid={`ai-badge-${a.id}`} title={`Generated by ${src}`}>
+                              <Zap className="w-2.5 h-2.5" /> AI
+                            </span>
+                          )}
+                          {isUser && (
+                            <span className="text-[9px] px-1.5 py-0.5 font-mono rounded-sm bg-zinc-800 text-zinc-400 border border-zinc-700">USER-WRITTEN</span>
+                          )}
+                          {isFallback && (
+                            <span className="text-[9px] px-1.5 py-0.5 font-mono rounded-sm bg-amber-500/10 text-amber-400 border border-amber-500/30" title="AI unavailable — used a simple template">TEMPLATE</span>
+                          )}
+                          <span className="text-[10px] text-zinc-600 font-mono">{new Date(a.applied_at).toLocaleDateString()}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          onClick={() => setClExpandedAppId(expanded ? null : a.id)}
+                          className="btn-secondary text-[10px] px-2.5 py-1 flex items-center gap-1"
+                          data-testid={`toggle-cover-letter-${a.id}`}
+                        >
+                          <FileText className="w-3 h-3" /> {expanded ? 'HIDE' : 'COVER LETTER'}
+                        </button>
+                        <button
+                          onClick={() => regenerateCoverLetter(a.id)}
+                          disabled={clRegenLoading === a.id}
+                          className="btn-secondary text-[10px] px-2.5 py-1 flex items-center gap-1 disabled:opacity-50"
+                          data-testid={`regenerate-cover-letter-${a.id}`}
+                          title="Regenerate cover letter with AI"
+                        >
+                          {clRegenLoading === a.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />} REGENERATE
+                        </button>
+                      </div>
+                    </div>
+
+                    {expanded && (
+                      <div className="mt-3 pt-3 border-t border-zinc-800 space-y-3" data-testid={`cover-letter-${a.id}`}>
+                        <div className="bg-black/30 rounded-sm border border-zinc-800 p-3 whitespace-pre-wrap text-xs text-zinc-300 leading-relaxed font-sans">
+                          {a.cover_letter || <span className="text-zinc-600 italic">No cover letter on file.</span>}
+                        </div>
+                        {a.cover_letter && (
+                          <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <p className="text-[10px] font-mono text-zinc-500">WHY EACH SENTENCE — AI ATTRIBUTION</p>
+                              {!attr && (
+                                <button
+                                  onClick={() => loadAttribution(a.id, a.cover_letter, a.job_id)}
+                                  disabled={clAttrLoading === a.id}
+                                  className="btn-secondary text-[10px] px-2 py-1 flex items-center gap-1 disabled:opacity-50"
+                                  data-testid={`attribute-cover-letter-${a.id}`}
+                                >
+                                  {clAttrLoading === a.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Brain className="w-3 h-3" />} ATTRIBUTE
+                                </button>
+                              )}
+                            </div>
+                            {attr && (
+                              <div className="space-y-1.5" data-testid={`attribution-${a.id}`}>
+                                <div className="flex items-center gap-3 text-[10px] font-mono text-zinc-500 mb-1">
+                                  <span>SENTENCES: <span className="text-zinc-300">{attr.sentence_count}</span></span>
+                                  <span>GENERIC: <span className={attr.generic_count > (attr.sentence_count / 2) ? 'text-amber-400' : 'text-zinc-300'}>{attr.generic_count}</span></span>
+                                  <span>ENGINE: <span className="text-[#00E5FF]">{attr.ai_provider}</span></span>
+                                </div>
+                                {(attr.sentences || []).map((s: any, idx: number) => {
+                                  const allGeneric = (s.sources || []).every((x: any) => x.type === 'generic');
+                                  return (
+                                    <div key={idx} className="bg-black/30 rounded-sm border border-zinc-800 p-2">
+                                      <p className={`text-[11px] leading-relaxed ${allGeneric ? 'text-zinc-500' : 'text-zinc-200'}`}>{s.sentence}</p>
+                                      {(s.sources || []).map((src: any, i: number) => src.type !== 'generic' && (
+                                        <div key={i} className="mt-1.5 flex items-start gap-2 text-[10px]">
+                                          <span className={`px-1.5 py-0.5 font-mono rounded-sm border shrink-0 ${
+                                            src.type === 'skill' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' :
+                                            src.type === 'experience' ? 'bg-purple-500/10 text-purple-400 border-purple-500/30' :
+                                            src.type === 'education' ? 'bg-blue-500/10 text-blue-400 border-blue-500/30' :
+                                            src.type === 'project' ? 'bg-orange-500/10 text-orange-400 border-orange-500/30' :
+                                            src.type === 'company' ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30' :
+                                            src.type === 'job_requirement' ? 'bg-pink-500/10 text-pink-400 border-pink-500/30' :
+                                            'bg-zinc-700 text-zinc-400'
+                                          }`}>{src.type.toUpperCase()}</span>
+                                          <span className="text-zinc-400 leading-relaxed">
+                                            <span className="text-zinc-200 font-medium">{src.value}</span>
+                                            {src.evidence && <> — <span className="italic text-zinc-500">"{src.evidence}"</span></>}
+                                          </span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

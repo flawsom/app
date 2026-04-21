@@ -43,6 +43,11 @@ User explicit requirements (from 2026-04-21 session):
 ## What's been implemented (growing log)
 
 ### 2026-04-21 session 1 — Pre-funding + YC seal
+- **Resume sections + DOCX** — `_extract_resume_text` now supports `.pdf` (pypdf) AND `.docx` (python-docx). Auto-detects by magic bytes + extension. New `_split_resume_sections` heuristic splits resume into `summary`, `experience`, `education`, `projects`, `skills`, `certifications`, `achievements` — persisted to `student_profiles.resume_sections` for richer downstream matching.
+- **`POST /api/applications/{id}/regenerate-cover-letter`** — student-only, owner-check, calls AI router, replaces stored letter, sets `cover_letter_source=ai:<provider>:regenerated`.
+- **`POST /api/cover-letter/attribute`** — per-sentence factor attribution. Returns `{sentences:[{text, sources:[{type, value, evidence}]}], generic_count, ai_provider}`. Source types: `skill`, `experience`, `education`, `project`, `job_requirement`, `company`, `greeting`, `generic`. Trust layer: students can audit why AI said what it said.
+- **Frontend applications tab redesigned** as a card list (no more flat table) with: AI/USER-WRITTEN/TEMPLATE badges, COVER LETTER expand/collapse, REGENERATE button, ATTRIBUTE button, and colour-coded source chips (emerald=skill, purple=experience, blue=education, orange=project, cyan=company, pink=job_requirement).
+- **requirements.txt** updated with `python-docx==1.2.0`.
 - **`POST /api/upload/resume` now parses and auto-fills profile** — pypdf extracts text → AI router parses to structured JSON (`first_name`, `last_name`, `skills[]`, `bio`, `phone`, `linkedin_url`, `github_url`, `cgpa`, `department`, `experience_years`) → merged into `student_profiles` with non-clobber semantics (existing non-empty user-set values are preserved; skills are unioned).
 - Response now returns `{parsed_fields, parsed, auto_filled, text_length}` so the frontend can show a toast listing what was auto-filled.
 - Added `re` import (was missing, caused silent extraction failure).

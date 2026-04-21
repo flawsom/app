@@ -216,13 +216,23 @@ curl -X POST -H "X-Cron-Secret: $SCHEDULER_SECRET" \
 
 ### Resume upload
 - **Endpoint:** `POST /api/upload/resume` — body: `{file_data: base64, file_name: string}`
-- **Flow:** store PDF → pypdf extracts text → AI router extracts structured fields → merged into `student_profiles` without clobbering user-set values. Returns `{parsed_fields, parsed, auto_filled, text_length}` so the frontend can show a "Profile auto-filled from resume" toast.
+- **Formats:** `.pdf` (via `pypdf`) **and** `.docx` (via `python-docx`). Auto-detected by magic bytes + file extension. Plain text also works as a last-resort.
+- **Flow:** store file → extract text → heuristic section splitter (summary / experience / education / projects / skills / certifications / achievements) → AI router extracts structured fields → merged into `student_profiles` without clobbering user-set values.
+- **Response:** `{parsed_fields, parsed, auto_filled, sections_found, sections, text_length, file_type}` so the frontend can show a "Profile auto-filled from resume" toast listing exactly what was changed.
 - **Fields extracted:** `first_name`, `last_name`, `skills[]`, `bio`, `phone`, `linkedin_url`, `github_url`, `cgpa`, `department`, `experience_years`.
+- **Resume sections** are persisted to `student_profiles.resume_sections` so the matcher, attribution engine, and future semantic-search layer can use typed context.
 
-### Cover letters
-- **`POST /api/applications`** — if the caller omits `cover_letter`, the backend auto-generates one using AI with the candidate's profile + the job description. The generated text is stored on the application document along with `cover_letter_source` (`user_provided`, `ai:<provider>`, or `fallback_heuristic`).
-- **`POST /api/cover-letter`** — on-demand regeneration from the dashboard. Rate-limited per user.
-- **No generic templates.** Every letter references concrete skills from the resume, the exact role, and the company by name. No brackets, no placeholders.
+### Cover letters — tailored per job, with proof
+- **`POST /api/applications`** — if `cover_letter` is omitted, the backend auto-generates one via the AI router using the student's parsed profile + the full job description. Stored on the application with `cover_letter_source` (`user_provided`, `ai:<provider>`, `fallback_heuristic`).
+- **`POST /api/cover-letter`** — on-demand generation from the dashboard. Rate-limited.
+- **`POST /api/applications/{id}/regenerate-cover-letter`** — rewrite the stored letter from scratch. Sets `cover_letter_source` to `ai:<provider>:regenerated`. Student-only; must own the application.
+- **`POST /api/cover-letter/attribute`** — per-sentence factor attribution. Returns `{sentences: [{text, sources:[{type, value, evidence}]}]}` where `type` is one of `skill`, `experience`, `education`, `project`, `job_requirement`, `company`, `greeting`, `generic`. **Students can audit exactly why the AI said what it said** — every claim is tied back to a line in their resume, their parsed skills, or the job posting, with the evidence quoted inline.
+- Frontend applications tab exposes:
+  - `AI` badge (cyan) / `USER-WRITTEN` badge / `TEMPLATE` badge next to every application
+  - `COVER LETTER` expand/collapse button (view the stored letter)
+  - `REGENERATE` button (rewrite with AI)
+  - `ATTRIBUTE` button (per-sentence source breakdown with colour-coded chips)
+- **No generic letters.** System prompt explicitly bans placeholders, brackets, and filler phrases. Every line references concrete skills, the role, or the company by name.
 
 ---
 
