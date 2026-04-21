@@ -345,6 +345,35 @@ async def lifespan(app):
 
 app = FastAPI(title="UNIFY API", version=APP_VERSION, lifespan=lifespan)
 
+# GZip compression on responses >= 500 bytes — Part 1
+from fastapi.middleware.gzip import GZipMiddleware
+app.add_middleware(GZipMiddleware, minimum_size=500)
+
+# Security headers — Part 1 (CSP, X-Frame, X-Content-Type, HSTS)
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        # Don't clobber existing headers (e.g. set by downstream)
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+        if ENVIRONMENT == "production":
+            response.headers.setdefault(
+                "Strict-Transport-Security",
+                "max-age=31536000; includeSubDomains; preload",
+            )
+        # Minimal CSP suitable for JSON API; the Next.js frontend sets its own CSP via vercel.json.
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; frame-ancestors 'none';",
+        )
+        return response
+
+app.add_middleware(SecurityHeadersMiddleware)
+
 # CORS — explicit origin list (no wildcards). Add FRONTEND_URL at runtime.
 _allowed_origins = {
     FRONTEND_URL,
@@ -706,9 +735,18 @@ async def list_jobs(request: Request, status: Optional[str] = None, job_type: Op
                 logger.warning("inline_live_sync_failed", extra={"error": str(e)[:200]})
     total = await db.job_postings.count_documents(query)
     jobs = await db.job_postings.find(query).sort("created_at", -1).skip((page-1)*limit).limit(limit).to_list(limit)
+    # Batch application counts with a single aggregation instead of N+1 count_documents.
+    job_ids = [str(j["_id"]) for j in jobs]
+    counts_map = {}
+    if job_ids:
+        agg = await db.applications.aggregate([
+            {"$match": {"job_id": {"$in": job_ids}}},
+            {"$group": {"_id": "$job_id", "c": {"$sum": 1}}},
+        ]).to_list(len(job_ids))
+        counts_map = {x["_id"]: x["c"] for x in agg}
     for j in jobs:
         j["_id"] = str(j["_id"]); j["id"] = j["_id"]
-        j["application_count"] = await db.applications.count_documents({"job_id": j["id"]})
+        j["application_count"] = counts_map.get(j["id"], 0)
         if not j.get("company_logo") and j.get("company_name"):
             j["company_logo"] = company_logo_url(j["company_name"])
     return {"jobs": jobs, "total": total, "page": page, "limit": limit}
@@ -1056,10 +1094,15 @@ async def get_momentum(request: Request):
     if apps >= 1: milestones.append({"id": "first_app", "title": "First Application", "achieved": True, "icon": "rocket"})
     if apps >= 5: milestones.append({"id": "five_apps", "title": "5 Applications", "achieved": True, "icon": "fire"})
     if selected >= 1: milestones.append({"id": "first_select", "title": "First Selection", "achieved": True, "icon": "trophy"})
-    weekly = [0]*7
-    for i in range(7):
-        d = (datetime.now(timezone.utc) - timedelta(days=6-i)).strftime("%Y-%m-%d")
-        weekly[i] = await db.behavior_events.count_documents({"user_id": user["id"], "created_at": {"$regex": f"^{d}"}})
+    # Weekly activity in ONE aggregation (was 7 sequential count_documents).
+    today = datetime.now(timezone.utc)
+    start_day = (today - timedelta(days=6)).strftime("%Y-%m-%d")
+    agg = await db.behavior_events.aggregate([
+        {"$match": {"user_id": user["id"], "created_at": {"$gte": start_day}}},
+        {"$group": {"_id": {"$substrBytes": ["$created_at", 0, 10]}, "c": {"$sum": 1}}},
+    ]).to_list(14)
+    by_day = {x["_id"]: x["c"] for x in agg}
+    weekly = [by_day.get((today - timedelta(days=6-i)).strftime("%Y-%m-%d"), 0) for i in range(7)]
     return {"current_streak": mom.get("current_streak",0) if mom else 0, "longest_streak": mom.get("longest_streak",0) if mom else 0,
             "total_actions": mom.get("total_actions",0) if mom else 0, "milestones": milestones, "weekly_activity": weekly,
             "level": level, "xp": xp, "xp_to_next": xp_to_next, "total_applications": apps, "total_selections": selected, "total_certificates": certs}
@@ -1141,15 +1184,37 @@ async def chatbot(request: Request):
 DEFAULT_WEIGHTS = {"skills": 0.35, "experience": 0.15, "competition": 0.20, "profile": 0.15, "timing": 0.15}
 LEARNING_RATE = 0.02
 
-async def _get_model_weights():
+# In-process cache for model weights doc. Refreshed every 60s to keep hire-probability calls O(1).
+_MW_CACHE: dict = {"doc": None, "expires_at": 0.0}
+_MW_TTL_SEC = 60.0
+
+async def _get_model_weights_doc() -> dict:
+    import time as _t
+    now = _t.time()
+    if _MW_CACHE["doc"] is not None and now < _MW_CACHE["expires_at"]:
+        return _MW_CACHE["doc"]
     doc = await db.model_weights.find_one({"_id": "global"})
-    if doc: return {k: doc[k] for k in DEFAULT_WEIGHTS if k in doc}
-    await db.model_weights.insert_one({"_id": "global", **DEFAULT_WEIGHTS, "version": 1, "outcomes_processed": 0, "updated_at": datetime.now(timezone.utc).isoformat()})
-    return dict(DEFAULT_WEIGHTS)
+    if not doc:
+        doc = {"_id": "global", **DEFAULT_WEIGHTS, "version": 1, "outcomes_processed": 0, "updated_at": datetime.now(timezone.utc).isoformat()}
+        try:
+            await db.model_weights.insert_one(doc)
+        except Exception:
+            pass
+    _MW_CACHE["doc"] = doc
+    _MW_CACHE["expires_at"] = now + _MW_TTL_SEC
+    return doc
+
+def _invalidate_mw_cache():
+    _MW_CACHE["doc"] = None
+    _MW_CACHE["expires_at"] = 0.0
+
+async def _get_model_weights():
+    doc = await _get_model_weights_doc()
+    return {k: doc[k] for k in DEFAULT_WEIGHTS if k in doc}
 
 async def _adapt_weights(outcome, factors):
     weights = await _get_model_weights()
-    doc = await db.model_weights.find_one({"_id": "global"}) or {}
+    doc = await _get_model_weights_doc() or {}
     total_outcomes = doc.get("outcomes_processed", 0) + 1
     lr = max(0.005, LEARNING_RATE / (1 + total_outcomes / 500))
     if outcome == "hired":
@@ -1161,6 +1226,7 @@ async def _adapt_weights(outcome, factors):
     total = sum(weights.values())
     if total > 0: weights = {k: round(v/total, 4) for k, v in weights.items()}
     await db.model_weights.update_one({"_id": "global"}, {"$set": {**weights, "outcomes_processed": total_outcomes, "version": total_outcomes, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    _invalidate_mw_cache()
     return weights
 
 def _skill_overlap(ss, js):
@@ -1184,8 +1250,21 @@ async def _compute_hire_probability(profile, job, apps_count, job_apps):
     if prof_score < 0.6: improvements.append("Complete your profile (bio, LinkedIn, phone)")
     if timing_score < 0.5: improvements.append("Apply within 24h of posting")
     if exp_score < 0.3: improvements.append("Apply more to build experience signal")
-    mdoc = await db.model_weights.find_one({"_id": "global"}) or {}
-    return {"probability": prob, "factors": {"skills": round(skill_score,2), "experience": round(exp_score,2), "competition": round(comp_score,2), "profile": round(prof_score,2), "timing": round(timing_score,2)}, "improvement": improvements[:4], "model_version": mdoc.get("version",0)}
+    mdoc = await _get_model_weights_doc() or {}
+    # Confidence interval: widens when the model has few outcomes to learn from.
+    # Based on Wilson-style heuristic: base uncertainty shrinks with sqrt(outcomes).
+    n = int(mdoc.get("outcomes_processed", 0))
+    uncertainty = round(max(0.05, 0.25 / ((n + 5) ** 0.5)), 3)
+    lower = round(max(0.02, prob - uncertainty), 2)
+    upper = round(min(0.98, prob + uncertainty), 2)
+    confidence_level = "high" if n >= 50 else ("medium" if n >= 10 else "low")
+    return {
+        "probability": prob,
+        "factors": {"skills": round(skill_score,2), "experience": round(exp_score,2), "competition": round(comp_score,2), "profile": round(prof_score,2), "timing": round(timing_score,2)},
+        "improvement": improvements[:4],
+        "model_version": mdoc.get("version",0),
+        "confidence_interval": {"lower": lower, "upper": upper, "uncertainty": uncertainty, "level": confidence_level, "outcomes_trained_on": n},
+    }
 
 @app.post("/api/hiring-probability")
 async def hiring_probability(request: Request):
@@ -1294,30 +1373,171 @@ async def employer_best_candidates(request: Request, job_id: Optional[str] = Non
                 j = await db.job_postings.find_one({"_id": ObjectId(job_id)})
                 if j: emp_jobs = [j]
             except: pass
+    if not emp_jobs:
+        return {"candidates": [], "total": 0}
+    job_ids = [str(j["_id"]) for j in emp_jobs]
+    jobs_by_id = {str(j["_id"]): j for j in emp_jobs}
+    # Single query: all applications for these jobs.
+    all_apps = await db.applications.find({"job_id": {"$in": job_ids}}).to_list(1000)
+    # Count apps per job in one shot.
+    apps_per_job: dict = {}
+    for a in all_apps:
+        apps_per_job[a["job_id"]] = apps_per_job.get(a["job_id"], 0) + 1
+    # Bulk-fetch profiles + users + each student's total app count.
+    student_ids = list({a["student_id"] for a in all_apps})
+    if not student_ids:
+        return {"candidates": [], "total": 0}
+    profiles_list = await db.student_profiles.find({"user_id": {"$in": student_ids}}).to_list(len(student_ids))
+    profiles_by_uid = {p["user_id"]: p for p in profiles_list}
+    try:
+        user_oids = [ObjectId(s) for s in student_ids if ObjectId.is_valid(s)]
+    except Exception:
+        user_oids = []
+    users_list = await db.users.find({"_id": {"$in": user_oids}}, {"password_hash": 0}).to_list(len(user_oids))
+    users_by_id = {str(u["_id"]): u for u in users_list}
+    # Student total application counts in one aggregation.
+    app_counts_agg = await db.applications.aggregate([
+        {"$match": {"student_id": {"$in": student_ids}}},
+        {"$group": {"_id": "$student_id", "c": {"$sum": 1}}},
+    ]).to_list(len(student_ids))
+    apps_count_by_student = {x["_id"]: x["c"] for x in app_counts_agg}
+
     candidates, seen = [], set()
-    for job in emp_jobs:
-        jid = str(job["_id"]); apps_for = await db.applications.find({"job_id": jid}).to_list(100)
-        for ad in apps_for:
-            sid = ad["student_id"]
-            if sid in seen: continue
-            seen.add(sid); prof = await db.student_profiles.find_one({"user_id": sid}) or {}
-            su = await db.users.find_one({"_id": ObjectId(sid)}, {"password_hash": 0})
-            if not su: continue
-            prob = await _compute_hire_probability(prof, job, await db.applications.count_documents({"student_id": sid}), len(apps_for))
-            reasons = []
-            if prob["factors"]["skills"] >= 0.7: reasons.append("Exact skill match")
-            if prob["factors"]["profile"] >= 0.6: reasons.append("Complete profile")
-            if not reasons: reasons.append("Potential fit")
-            candidates.append({"user_id": sid, "name": su.get("name",""), "email": su.get("email",""), "department": prof.get("department",""),
-                               "skills": prof.get("skills",[]), "hire_probability": prob["probability"], "factors": prob["factors"],
-                               "reason": " + ".join(reasons), "application_id": str(ad["_id"]), "job_id": jid, "job_title": job.get("title",""), "status": ad.get("status","submitted")})
+    for ad in all_apps:
+        sid = ad["student_id"]
+        if sid in seen: continue
+        seen.add(sid)
+        job = jobs_by_id.get(ad["job_id"])
+        if not job: continue
+        prof = profiles_by_uid.get(sid, {})
+        su = users_by_id.get(sid)
+        if not su: continue
+        prob = await _compute_hire_probability(prof, job, apps_count_by_student.get(sid, 0), apps_per_job.get(ad["job_id"], 1))
+        f = prob["factors"]
+        reasons = []
+        ss = set(s.lower() for s in (prof.get("skills") or []))
+        js = set(s.lower() for s in (job.get("required_skills") or []))
+        matched = sorted(list(ss & js))[:4]
+        if matched:
+            reasons.append(f"Matches {len(matched)}/{max(len(js),1)} required skills: {', '.join(s.title() for s in matched)}")
+        elif f["skills"] >= 0.7:
+            reasons.append("Strong skill alignment")
+        if f["profile"] >= 0.6:
+            reasons.append(f"Profile {int(f['profile']*100)}% complete")
+        if f["experience"] >= 0.5:
+            reasons.append(f"Active applicant ({int(f['experience']*10)}+ prior apps)")
+        if f["timing"] >= 0.7:
+            reasons.append("Applied early")
+        if f["competition"] >= 0.7:
+            reasons.append("Low competition pool")
+        if not reasons:
+            reasons.append(f"{int(prob['probability']*100)}% baseline match")
+        fit_summary = " · ".join(reasons[:3])
+        candidates.append({
+            "user_id": sid,
+            "name": su.get("name",""),
+            "email": su.get("email",""),
+            "department": prof.get("department",""),
+            "skills": prof.get("skills",[]),
+            "hire_probability": prob["probability"],
+            "confidence_interval": prob.get("confidence_interval"),
+            "factors": prob["factors"],
+            "reason": fit_summary,
+            "fit_summary": fit_summary,
+            "matched_skills": matched,
+            "missing_skills": sorted(list(js - ss))[:4],
+            "application_id": str(ad["_id"]),
+            "job_id": ad["job_id"],
+            "job_title": job.get("title",""),
+            "status": ad.get("status","submitted"),
+        })
     candidates.sort(key=lambda x: -x["hire_probability"])
     return {"candidates": candidates[:30], "total": len(candidates)}
 
+
 @app.get("/api/model/weights")
 async def get_model_weights_endpoint(request: Request):
-    await get_current_user(request); w = await _get_model_weights(); doc = await db.model_weights.find_one({"_id": "global"}) or {}
-    return {"weights": w, "version": doc.get("version",0), "outcomes_processed": doc.get("outcomes_processed",0), "updated_at": doc.get("updated_at",""), "default_weights": DEFAULT_WEIGHTS}
+    await get_current_user(request)
+    w = await _get_model_weights()
+    doc = await db.model_weights.find_one({"_id": "global"}) or {}
+    n_outcomes = int(doc.get("outcomes_processed", 0))
+    # Per-factor accuracy: for each factor, what % of hired outcomes had a "strong" signal (>=0.5)
+    # on that factor vs rejected outcomes. Computed from the probability_predictions + hiring_outcomes join.
+    per_factor_accuracy = {k: None for k in DEFAULT_WEIGHTS}
+    try:
+        outcomes = await db.hiring_outcomes.find({}).to_list(2000)
+        if outcomes:
+            hit, total = {k: 0 for k in DEFAULT_WEIGHTS}, {k: 0 for k in DEFAULT_WEIGHTS}
+            for o in outcomes:
+                pred = await db.probability_predictions.find_one({"user_id": o["user_id"], "job_id": o["job_id"]})
+                if not pred: continue
+                factors = pred.get("factors", {}) or {}
+                is_hired = o.get("outcome") == "hired"
+                for k in DEFAULT_WEIGHTS:
+                    v = float(factors.get(k, 0))
+                    strong = v >= 0.5
+                    total[k] += 1
+                    # A factor is "correct" if it strongly predicted hire AND outcome is hire, OR weak signal AND reject.
+                    if (strong and is_hired) or (not strong and not is_hired):
+                        hit[k] += 1
+            per_factor_accuracy = {k: (round(hit[k]/total[k], 3) if total[k] else None) for k in DEFAULT_WEIGHTS}
+    except Exception as e:
+        logger.warning("per_factor_accuracy_failed", extra={"error": str(e)[:200]})
+    # Overall model confidence (mirrors confidence_interval.level on predictions)
+    confidence_level = "high" if n_outcomes >= 50 else ("medium" if n_outcomes >= 10 else "low")
+    return {
+        "weights": w,
+        "version": doc.get("version", 0),
+        "outcomes_processed": n_outcomes,
+        "total_outcomes_trained_on": n_outcomes,
+        "updated_at": doc.get("updated_at", ""),
+        "last_updated": doc.get("updated_at", ""),
+        "default_weights": DEFAULT_WEIGHTS,
+        "per_factor_accuracy": per_factor_accuracy,
+        "confidence_level": confidence_level,
+        "learning_rate": round(max(0.005, LEARNING_RATE / (1 + n_outcomes / 500)), 4),
+    }
+
+
+@app.post("/api/model/recompute-weights")
+async def recompute_weights_endpoint(request: Request):
+    """Nightly-style aggregation: recomputes global weights from scratch using ALL stored outcomes.
+
+    Admin-only. Uses a simple least-squares fit: factors that correlate with `hired` get lifted,
+    factors that correlate with `rejected` get dampened. Renormalises to sum to 1.0.
+    """
+    await require_role("admin", "placement")(request)
+    outcomes = await db.hiring_outcomes.find({}).to_list(5000)
+    if not outcomes:
+        doc = await db.model_weights.find_one({"_id": "global"}) or {}
+        return {"message": "No outcomes recorded yet — weights unchanged", "version": doc.get("version", 0), "outcomes_processed": 0}
+    # Accumulate correlation between each factor and outcome (1=hired, 0=rejected).
+    scores = {k: 0.0 for k in DEFAULT_WEIGHTS}
+    n_valid = 0
+    for o in outcomes:
+        pred = await db.probability_predictions.find_one({"user_id": o["user_id"], "job_id": o["job_id"]})
+        if not pred: continue
+        factors = pred.get("factors", {}) or {}
+        y = 1.0 if o.get("outcome") == "hired" else 0.0
+        for k in DEFAULT_WEIGHTS:
+            v = float(factors.get(k, 0.0))
+            # Centered contribution: (factor - 0.5) * (outcome - 0.5) — positive when factor agrees with outcome.
+            scores[k] += (v - 0.5) * (y - 0.5)
+        n_valid += 1
+    if n_valid == 0:
+        return {"message": "No predictions matched outcomes — weights unchanged", "outcomes_processed": 0}
+    # Shift from signed scores to non-negative weights, blended with default to prevent collapse.
+    shifted = {k: max(0.0, scores[k] / n_valid + DEFAULT_WEIGHTS[k]) for k in DEFAULT_WEIGHTS}
+    total = sum(shifted.values()) or 1.0
+    new_weights = {k: round(v / total, 4) for k, v in shifted.items()}
+    now = datetime.now(timezone.utc).isoformat()
+    await db.model_weights.update_one(
+        {"_id": "global"},
+        {"$set": {**new_weights, "outcomes_processed": n_valid, "version": n_valid, "updated_at": now, "recomputed_at": now}},
+        upsert=True,
+    )
+    logger.info("model_weights_recomputed", extra={"outcomes": n_valid, "weights": new_weights})
+    return {"message": "Weights recomputed from all outcomes", "weights": new_weights, "outcomes_processed": n_valid, "updated_at": now}
 
 @app.get("/api/user-behavior")
 async def user_behavior_analysis(request: Request):
@@ -1344,21 +1564,39 @@ async def predictive_alerts(request: Request):
     profile = await db.student_profiles.find_one({"user_id": user["id"]}) or {}
     ss = set(s.lower() for s in (profile.get("skills") or []))
     if not ss: return {"alerts": [], "message": "Add skills to get alerts"}
-    applied = set(); apps = await db.applications.find({"student_id": user["id"]}, {"job_id": 1}).to_list(1000)
-    for a in apps: applied.add(a["job_id"])
-    jobs = await db.job_postings.find({"status": "active"}).to_list(50); ac = len(apps); alerts = []
+    # Single aggregation: fetch not-applied jobs + application counts in one round-trip.
+    applied_ids = [a["job_id"] for a in await db.applications.find({"student_id": user["id"]}, {"job_id": 1}).to_list(1000)]
+    ac = len(applied_ids)
+    try:
+        applied_oids = [ObjectId(x) for x in applied_ids if ObjectId.is_valid(x)]
+    except Exception:
+        applied_oids = []
+    pipeline = [
+        {"$match": {"status": "active", "_id": {"$nin": applied_oids}}},
+        {"$lookup": {"from": "applications", "let": {"jid": {"$toString": "$_id"}},
+                     "pipeline": [{"$match": {"$expr": {"$eq": ["$job_id", "$$jid"]}}}, {"$count": "c"}],
+                     "as": "apps"}},
+        {"$addFields": {"apps_for": {"$ifNull": [{"$arrayElemAt": ["$apps.c", 0]}, 0]}}},
+        {"$project": {"apps": 0}},
+        {"$limit": 50},
+    ]
+    jobs = await db.job_postings.aggregate(pipeline).to_list(50)
+    alerts = []
     for j in jobs:
-        jid = str(j["_id"])
-        if jid in applied: continue
-        ja = await db.applications.count_documents({"job_id": jid})
+        jid = str(j["_id"]); ja = int(j.get("apps_for", 0))
         prob = await _compute_hire_probability(profile, j, ac, ja)
         if prob["probability"] >= 0.35:
-            dl = j.get("application_deadline",""); hl = None
+            dl = j.get("application_deadline", ""); hl = None
             if dl:
                 try: hl = max(0, (datetime.fromisoformat(dl) - datetime.now(timezone.utc)).total_seconds()/3600)
                 except: pass
             urg = "CRITICAL" if (hl and hl < 24) else ("HIGH" if prob["probability"] >= 0.5 else "MEDIUM")
-            alerts.append({"job_id": jid, "title": j.get("title",""), "company": j.get("company_name",""), "probability": prob["probability"], "urgency": urg, "message": f"Apply now — {int(prob['probability']*100)}% hire probability", "hours_until_deadline": round(hl,1) if hl else None})
+            alerts.append({"job_id": jid, "title": j.get("title",""), "company": j.get("company_name",""),
+                           "probability": prob["probability"], "urgency": urg,
+                           "message": f"Apply now — {int(prob['probability']*100)}% hire probability",
+                           "hours_until_deadline": round(hl,1) if hl else None,
+                           "confidence_interval": prob.get("confidence_interval")})
+            if len(alerts) >= 10: break  # early exit
     alerts.sort(key=lambda x: (-x["probability"], x.get("hours_until_deadline") or 9999))
     return {"alerts": alerts[:10]}
 
