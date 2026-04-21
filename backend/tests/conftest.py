@@ -3,7 +3,7 @@ import time
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://unify-seal.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("TEST_BACKEND_URL", "http://localhost:8001").rstrip("/")
 SCHEDULER_SECRET = "unify_sched_8f3a2b7c1d9e4a6f5c0b3d8e2a7f1c4b"
 
 ADMIN_EMAIL = "admin@unifies.codes"

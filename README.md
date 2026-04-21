@@ -26,10 +26,14 @@ Browser ─HTTPS─▶ Vercel (Next.js)  ─HTTPS─▶ Render (FastAPI) ─▶ 
 ```
 
 ### Key invariants
-- Scheduler jobs are **idempotent across replicas** via the `scheduler_locks` collection (TTL-indexed, 90s baseline, per-job overrides).
-- Every email is persisted to `email_logs` with status (`pending → sent / permanently_failed`), attempts, Resend message id, and error. Retries use exponential backoff (0.5s → 1.5s → 4.5s) before giving up.
-- All URLs are constructed from environment variables. Zero hard-coded origins.
-- Google OAuth uses **direct ID-token verification** — no third-party proxy service.
+- **Resume uploads auto-fill the profile.** The backend accepts `.pdf` (via `pypdf`) and `.docx` (via `python-docx`), extracts text, heuristically splits into sections (summary / experience / education / projects / skills / certifications / achievements), then sends to the AI router to extract structured fields. Never overwrites non-empty user-set values; skills are unioned. Sections persisted for downstream matching + attribution.
+- **Every application gets a tailored cover letter.** If the student doesn't provide one, `POST /api/applications` auto-generates it. `cover_letter_source` is recorded on every application so the UI can show AI / USER-WRITTEN / TEMPLATE badges.
+- **Cover letters are auditable.** `POST /api/cover-letter/attribute` breaks every sentence down and shows which skill / experience / project / job requirement it came from, with the evidence quoted inline. No hallucination can hide.
+- **Scheduler jobs are idempotent across replicas** via the `scheduler_locks` collection (TTL-indexed, 90s baseline, per-job overrides). APScheduler + Render Cron both converge on `run_with_lock`.
+- **Every email is persisted** to `email_logs` with status (`pending → sent / permanently_failed`), attempts, Resend message id, and error. Retries use exponential backoff (0.5s → 1.5s → 4.5s).
+- **All URLs are constructed from environment variables.** Zero hard-coded origins.
+- **Google OAuth uses direct ID-token verification** — no third-party proxy service.
+- **i18n parity is machine-enforced.** `node scripts/i18n-parity.js` fails CI on any missing key across en / hi / te / ta / or.
 
 ---
 
