@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 
 class UnifyAPITester:
-    def __init__(self, base_url="https://auth-debug-105.preview.emergentagent.com"):
+    def __init__(self, base_url="https://hiring-engine-dev.preview.emergentagent.com"):
         self.base_url = base_url
         self.session = requests.Session()
         self.tokens = {}
