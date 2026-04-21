@@ -207,11 +207,26 @@ curl -X POST -H "X-Cron-Secret: $SCHEDULER_SECRET" \
 - **`GET /api/health`** — Mongo ping, AI provider status, integrations status
 - **`GET /api/admin/email-logs`** (admin only) — sent / failed / retrying counts, last 50 rows
 - **`POST /api/admin/email-logs/retry/:id`** — requeue a failed email
+- **`POST /api/admin/email-test`** — fire any transactional email template on demand (demo safety net)
+- **`POST /api/admin/model/seed-synthetic-outcomes`** — seed N plausible outcomes from real profile×job pairs and trigger weight recompute (live "the model learns" moment for demos)
+- **`GET /api/model/weights`** — live weights, version, outcome count, per-factor accuracy
 - **Sentry** — both frontend and backend are wired via DSN env vars
+
+## 7. Resume → profile auto-fill + per-job cover letters
+
+### Resume upload
+- **Endpoint:** `POST /api/upload/resume` — body: `{file_data: base64, file_name: string}`
+- **Flow:** store PDF → pypdf extracts text → AI router extracts structured fields → merged into `student_profiles` without clobbering user-set values. Returns `{parsed_fields, parsed, auto_filled, text_length}` so the frontend can show a "Profile auto-filled from resume" toast.
+- **Fields extracted:** `first_name`, `last_name`, `skills[]`, `bio`, `phone`, `linkedin_url`, `github_url`, `cgpa`, `department`, `experience_years`.
+
+### Cover letters
+- **`POST /api/applications`** — if the caller omits `cover_letter`, the backend auto-generates one using AI with the candidate's profile + the job description. The generated text is stored on the application document along with `cover_letter_source` (`user_provided`, `ai:<provider>`, or `fallback_heuristic`).
+- **`POST /api/cover-letter`** — on-demand regeneration from the dashboard. Rate-limited per user.
+- **No generic templates.** Every letter references concrete skills from the resume, the exact role, and the company by name. No brackets, no placeholders.
 
 ---
 
-## 7. Lighthouse targets
+## 8. Lighthouse targets
 
 Run on production (`next build && next start`) — not the dev server — and target the three hero pages:
 
@@ -231,7 +246,7 @@ Key practices baked in:
 
 ---
 
-## 8. i18n — 100% coverage guaranteed
+## 9. i18n — 100% coverage guaranteed
 
 Five locales live in `/frontend/src/i18n/{en,hi,te,ta,or}.json`. The parity script enforces zero fallbacks to English:
 
@@ -250,7 +265,7 @@ Locale persists to `localStorage` and is available through `useI18n()` — the l
 
 ---
 
-## 9. Y Combinator pitch — one paragraph
+## 10. Y Combinator pitch — one paragraph
 
 > **Every year 10M+ students in India apply to jobs they have no chance of getting.** The result: 6-month placement cycles, exhausted career cells, and hiring teams drowning in unfit applications. UNIFY replaces hope with math — a probability score for every student × job pair, built on a self-learning model that adapts on every outcome. Students apply where they can win. Employers see pre-ranked candidates with confidence intervals and transparent factor breakdowns. Placement cells finally get a CRM that doesn't just track — it steers. We ship the full stack today: AI match engine, verifiable certificates, public share-your-guarantee profile, live job feeds, weekly digest automation — in 5 Indic languages, on a stack that scales horizontally from day one.
 
@@ -258,7 +273,7 @@ Locale persists to `localStorage` and is available through `useI18n()` — the l
 
 ---
 
-## 10. Licence & contact
+## 11. Licence & contact
 
 - **Legal:** UNIFY · unifies.codes · support@unifies.codes
 - **Copyright:** © UNIFY 2026

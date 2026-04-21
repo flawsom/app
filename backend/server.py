@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from typing import Optional, List
 from bson import ObjectId
 from dotenv import load_dotenv
-import os, jwt, bcrypt, hashlib, secrets, json, asyncio, csv, io, base64, traceback
+import os, jwt, bcrypt, hashlib, secrets, json, asyncio, csv, io, base64, traceback, re
 
 # Load .env BEFORE importing unify_* modules (they read env at import time)
 load_dotenv()
@@ -988,8 +988,50 @@ async def create_application(req: ApplicationCreate, request: Request):
     if not job: raise HTTPException(404, "Job not found")
     mentor = await db.mentor_profiles.find_one({}); mentor_id = str(mentor["user_id"]) if mentor else None
     now = datetime.now(timezone.utc).isoformat()
+    # ── Auto-generate a tailored cover letter if the student didn't supply one.
+    cover_letter = (req.cover_letter or "").strip()
+    cover_letter_source = "user_provided" if cover_letter else None
+    profile = await db.student_profiles.find_one({"user_id": user["id"]}) or {}
+    if not cover_letter:
+        try:
+            skills = profile.get("skills", []) or []
+            bio = profile.get("bio", "") or ""
+            dept = profile.get("department", "") or ""
+            ai = await ai_generate(
+                system="You are an expert career advisor. Write concise, specific, sincere cover letters with zero placeholder text, zero brackets, and zero generic phrases like 'I am writing to express my interest'. Every line references concrete skills, the company, or the role.",
+                prompt=(
+                    f"Write a 180-word cover letter for {user.get('name','the candidate')} "
+                    f"applying to {job.get('title','')} at {job.get('company_name','')}.\n"
+                    f"Candidate skills: {', '.join(skills[:10]) or 'not specified'}.\n"
+                    f"Candidate bio: {bio or 'not specified'}.\n"
+                    f"Candidate department: {dept or 'not specified'}.\n"
+                    f"Required skills for role: {', '.join((job.get('required_skills') or [])[:10]) or 'not specified'}.\n"
+                    f"Job description (for anchoring): {(job.get('description') or '')[:600]}\n\n"
+                    "Open with a specific hook tied to the company or role. End with 'Best regards,' and the candidate's full name."
+                ),
+                session_id=f"auto-cl-{user['id']}-{req.job_id}",
+                max_tokens=600,
+            )
+            cover_letter = (ai.get("text") or "").strip()
+            cover_letter_source = f"ai:{ai.get('provider','unknown')}"
+            try:
+                await record_tokens(db, user, "cover-letter", tokens_estimated=len(cover_letter) // 4, provider=ai.get("provider", ""))
+            except Exception:
+                pass
+        except Exception as e:  # noqa: BLE001
+            logger.warning("auto_cover_letter_failed", extra={"error": str(e)[:200]})
+            # Heuristic fallback so the application always has *some* cover letter.
+            sk3 = ", ".join((profile.get("skills") or [])[:3]) or "my coursework"
+            cover_letter = (
+                f"Dear {job.get('company_name','Hiring')} team,\n\n"
+                f"I'm applying for the {job.get('title','')} role. My background in {sk3} "
+                f"aligns with what you're building, and I'd welcome the chance to contribute.\n\n"
+                f"Best regards,\n{user.get('name','')}"
+            )
+            cover_letter_source = "fallback_heuristic"
     doc = {"student_id": user["id"], "student_name": user.get("name",""), "job_id": req.job_id, "job_title": job.get("title",""),
-           "company_name": job.get("company_name",""), "cover_letter": req.cover_letter, "status": "submitted",
+           "company_name": job.get("company_name",""), "cover_letter": cover_letter, "cover_letter_source": cover_letter_source,
+           "status": "submitted",
            "mentor_approval_status": "pending", "mentor_id": mentor_id, "matching_score": 0, "applied_at": now, "updated_at": now}
     r = await db.applications.insert_one(doc); doc["id"] = str(r.inserted_id); doc.pop("_id", None)
     if mentor_id: await create_notification(mentor_id, "New Application", f"{user['name']} applied to {job['title']}", "info")
@@ -999,7 +1041,6 @@ async def create_application(req: ApplicationCreate, request: Request):
         # Compute a live probability for the confirmation email so the number is real.
         apps_count = await db.applications.count_documents({"student_id": user["id"]})
         job_apps = await db.applications.count_documents({"job_id": req.job_id})
-        profile = await db.student_profiles.find_one({"user_id": user["id"]}) or {}
         prob_result = await _compute_hire_probability(profile, job, apps_count, job_apps)
         prob = prob_result.get("probability", 0.0)
         sub, html, text = application_submitted_email(user.get("name", ""), job.get("title", ""), job.get("company_name", ""), prob)
@@ -1017,7 +1058,7 @@ async def create_application(req: ApplicationCreate, request: Request):
                 await email_send(emp_user["email"], sub, html, text, email_type="employer_new_application")
     except Exception as e:  # noqa: BLE001
         logger.warning("application_email_employer_failed", extra={"error": str(e)[:200]})
-    await audit_log(user["id"], "apply", {"job_id": req.job_id})
+    await audit_log(user["id"], "apply", {"job_id": req.job_id, "cover_letter_source": cover_letter_source})
     # Track behavior
     await db.behavior_events.insert_one({"user_id": user["id"], "event_type": "apply", "target": req.job_id, "created_at": now})
     rec_cache = await db.recommendations_cache.find_one({"user_id": user["id"]})
@@ -1361,14 +1402,138 @@ async def skill_gap_analysis(request: Request):
     return {"student_skills": list(student_skills), "total_skills": len(student_skills), "total_gaps": len(gap_details), "gaps": gap_details[:15], "skill_coverage": round(len(student_skills)/max(len(all_req),1)*100, 1)}
 
 # ─── Resume Upload ────────────────────────────────────────────────
+def _extract_resume_text(file_data_b64: str) -> str:
+    """Extract plain text from a base64-encoded PDF (or fall back for other types).
+
+    Returns an empty string if extraction fails — the profile auto-fill step will
+    simply skip AI parsing in that case.
+    """
+    try:
+        raw = file_data_b64.split(",", 1)[-1] if "," in file_data_b64 else file_data_b64
+        data = base64.b64decode(raw)
+        # PDF path (the common case — the frontend accepts .pdf/.doc/.docx).
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(data))
+        pages = []
+        for page in reader.pages[:6]:  # cap at 6 pages
+            try:
+                pages.append(page.extract_text() or "")
+            except Exception:  # noqa: BLE001
+                continue
+        text = "\n".join(pages).strip()
+        # Collapse whitespace for cleaner AI prompts + DB storage.
+        return re.sub(r"\s+\n", "\n", re.sub(r"[ \t]+", " ", text))[:15000]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("resume_extract_failed", extra={"error": str(e)[:200]})
+        return ""
+
+
+async def _ai_parse_resume(resume_text: str) -> dict:
+    """Call the AI router to extract structured profile fields from resume text.
+
+    Returns a dict with any subset of {first_name, last_name, skills, bio,
+    phone, linkedin_url, github_url, cgpa, department, experience_years}.
+    Empty dict on failure — caller must handle gracefully.
+    """
+    if not resume_text or len(resume_text) < 40:
+        return {}
+    try:
+        ai = await ai_generate(
+            system=(
+                "You are a resume parser. Extract structured data from the resume text. "
+                "Respond with JSON ONLY — no commentary, no markdown fences. "
+                "Schema: {\"first_name\":string, \"last_name\":string, "
+                "\"skills\":string[] (max 15, lowercase, no duplicates, concrete tech/tools only), "
+                "\"bio\":string (one-sentence professional summary, max 180 chars), "
+                "\"phone\":string|null, \"linkedin_url\":string|null, \"github_url\":string|null, "
+                "\"cgpa\":number|null (0.0-10.0 or 0.0-4.0), "
+                "\"department\":string|null (e.g. 'Computer Science'), "
+                "\"experience_years\":number|null}. "
+                "Omit fields you can't confidently extract — do NOT invent values."
+            ),
+            prompt=f"Resume text:\n\n{resume_text[:8000]}\n\nReturn JSON now:",
+            session_id="resume_parse",
+            max_tokens=600,
+        )
+        parsed = ai_extract_json(ai.get("text", "")) or {}
+        if not isinstance(parsed, dict):
+            return {}
+        # Sanitise: drop empties/nulls/wrong types.
+        clean: dict = {}
+        for k in ("first_name", "last_name", "bio", "phone", "linkedin_url", "github_url", "department"):
+            v = parsed.get(k)
+            if isinstance(v, str) and v.strip() and v.strip().lower() not in ("null", "none", "n/a"):
+                clean[k] = v.strip()[:200]
+        sk = parsed.get("skills")
+        if isinstance(sk, list):
+            clean["skills"] = list({s.strip().lower()[:40] for s in sk if isinstance(s, str) and s.strip()})[:15]
+        cgpa = parsed.get("cgpa")
+        if isinstance(cgpa, (int, float)) and 0 < cgpa <= 10:
+            clean["cgpa"] = round(float(cgpa), 2)
+        exp = parsed.get("experience_years")
+        if isinstance(exp, (int, float)) and 0 <= exp <= 40:
+            clean["experience_years"] = float(exp)
+        return clean
+    except Exception as e:  # noqa: BLE001
+        logger.warning("resume_ai_parse_failed", extra={"error": str(e)[:200]})
+        return {}
+
+
 @app.post("/api/upload/resume")
 async def upload_resume(request: Request):
+    """Upload + parse + auto-fill profile from the resume in a single call.
+
+    Flow:
+      1. Store the base64 PDF in `uploads`.
+      2. Extract plain text (pypdf).
+      3. Ask the AI router for structured fields.
+      4. Merge into `student_profiles` (never overwriting non-empty existing values
+         except for `resume_text`).
+      5. Return `parsed` so the frontend can show what changed.
+    """
     user = await require_role("student")(request); body = await request.json()
     file_data = body.get("file_data", ""); file_name = body.get("file_name", "resume.pdf")
     if not file_data: raise HTTPException(400, "No file data")
-    await db.uploads.update_one({"user_id": user["id"], "type": "resume"}, {"$set": {"user_id": user["id"], "file_name": file_name, "file_data": file_data, "type": "resume", "uploaded_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
-    await db.student_profiles.update_one({"user_id": user["id"]}, {"$set": {"resume_url": f"/api/download/resume/{user['id']}"}})
-    return {"message": "Resume uploaded", "file_name": file_name}
+    await db.uploads.update_one(
+        {"user_id": user["id"], "type": "resume"},
+        {"$set": {"user_id": user["id"], "file_name": file_name, "file_data": file_data,
+                   "type": "resume", "uploaded_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    resume_url = f"/api/download/resume/{user['id']}"
+    # Extract + parse
+    extracted = _extract_resume_text(file_data)
+    parsed = await _ai_parse_resume(extracted) if extracted else {}
+    # Build merge update: never overwrite non-empty scalar fields the user already set.
+    existing = await db.student_profiles.find_one({"user_id": user["id"]}) or {}
+    update: dict = {"resume_url": resume_url}
+    if extracted:
+        update["resume_text"] = extracted[:6000]
+    for k in ("first_name", "last_name", "bio", "phone", "linkedin_url", "github_url", "department"):
+        if parsed.get(k) and not (existing.get(k) or "").strip():
+            update[k] = parsed[k]
+    if parsed.get("cgpa") and not existing.get("cgpa"):
+        update["cgpa"] = parsed["cgpa"]
+    # Skills: union (never shrink), cap 20.
+    if parsed.get("skills"):
+        union = list({*(s.lower() for s in (existing.get("skills") or [])), *parsed["skills"]})[:20]
+        update["skills"] = union
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.student_profiles.update_one({"user_id": user["id"]}, {"$set": update}, upsert=True)
+    # Keep user's name on the top-level users doc in sync if we parsed one.
+    if (parsed.get("first_name") or parsed.get("last_name")) and not (user.get("name") or "").strip():
+        full = f"{parsed.get('first_name','')} {parsed.get('last_name','')}".strip()
+        if full:
+            await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": {"name": full}})
+    await audit_log(user["id"], "resume_upload", {"file_name": file_name, "parsed_fields": list(parsed.keys())})
+    return {
+        "message": "Resume uploaded",
+        "file_name": file_name,
+        "parsed_fields": list(parsed.keys()),
+        "parsed": parsed,
+        "auto_filled": {k: v for k, v in update.items() if k not in ("resume_url", "resume_text", "updated_at")},
+        "text_length": len(extracted),
+    }
 
 @app.get("/api/download/resume/{user_id}")
 async def download_resume(user_id: str):

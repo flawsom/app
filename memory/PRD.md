@@ -42,7 +42,16 @@ User explicit requirements (from 2026-04-21 session):
 
 ## What's been implemented (growing log)
 
-### 2026-04-21 — Pre-funding + YC seal
+### 2026-04-21 session 1 — Pre-funding + YC seal
+- **`POST /api/upload/resume` now parses and auto-fills profile** — pypdf extracts text → AI router parses to structured JSON (`first_name`, `last_name`, `skills[]`, `bio`, `phone`, `linkedin_url`, `github_url`, `cgpa`, `department`, `experience_years`) → merged into `student_profiles` with non-clobber semantics (existing non-empty user-set values are preserved; skills are unioned).
+- Response now returns `{parsed_fields, parsed, auto_filled, text_length}` so the frontend can show a toast listing what was auto-filled.
+- Added `re` import (was missing, caused silent extraction failure).
+- **`POST /api/applications` auto-generates a tailored cover letter** when the `cover_letter` field is empty. Uses AI router with a stricter system prompt (no placeholders, no brackets, references company by name + concrete skills). Stores `cover_letter_source` on every application (`user_provided`, `ai:<provider>`, `fallback_heuristic`). Heuristic fallback if AI fails.
+- Frontend `uploadResume` → calls `apiPost('/api/upload/resume')`, shows toast "Profile auto-filled from resume — Auto-filled: first_name, last_name, skills, bio...", and hydrates the profile edit form immediately.
+- **README §7 documents both features** with endpoint specs and examples.
+- **Production Resend key + Anthropic key wired** in backend/.env — verified real email delivery (resend_id returned from API, status=sent in email_logs).
+- **`next build` verified clean** — 0 errors, 0 warnings; 13 routes including `/guarantee/[id]` as ƒ (dynamic, server-rendered with OG metadata).
+- **Backend regression pass** (iteration_10): 25 pytest cases covering auth/email/cron/model/student flows, all verified working. Real Resend delivery confirmed with real `resend_id` for each of 9 email triggers.
 - **unify_email.py rewritten** — durable `email_logs` persistence, 3-attempt retry with exponential backoff (0.5s→1.5s→4.5s), Resend message-id capture, typed emails (`email_type` field)
 - **Email triggers wired with types** — welcome, application_submitted, employer_new_application, application_status, certificate_issued, password_reset, interview_scheduled, weekly_digest, high_probability_job_alert
 - **`scheduler_locks` collection + TTL index** — 90s+ per-job TTL; stale locks auto-purge

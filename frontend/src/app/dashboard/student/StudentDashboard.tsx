@@ -180,7 +180,47 @@ export default function StudentDashboard() {
   const loadLeaderboard = async (cat?: string) => { const c = cat || lbCategory; setLbLoading(true); try { const data = await api(`/api/leaderboard?category=${c}`); setLeaderboard(data); } catch (e) { console.error(e); } setLbLoading(false); };
   const applyToJob = async (jobId: string) => { setApplyingJob(jobId); try { await apiPost('/api/applications', { job_id: jobId }); await loadData(); } catch (e: any) { alert(e.message); } setApplyingJob(null); };
   const saveProfile = async () => { try { await apiPut('/api/profile', { ...profileForm, skills: profileForm.skills.split(',').map(s => s.trim()).filter(Boolean), semester: Number(profileForm.semester), cgpa: Number(profileForm.cgpa) }); setEditProfile(false); await loadData(); } catch (e: any) { alert(e.message); } };
-  const uploadResume = async (e: React.ChangeEvent<HTMLInputElement>) => { const file = e.target.files?.[0]; if (!file) return; setUploading(true); const reader = new FileReader(); reader.onload = async () => { try { const data = reader.result as string; await apiPost('/api/upload/resume', { file_data: data, file_name: file.name }); setResumeData({ file_name: file.name, file_data: data }); await loadData(); } catch (err: any) { alert(err.message); } setUploading(false); }; reader.readAsDataURL(file); };
+  const uploadResume = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    setUploading(true);
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const data = reader.result as string;
+        const res: any = await apiPost('/api/upload/resume', { file_data: data, file_name: file.name });
+        setResumeData({ file_name: file.name, file_data: data });
+        const fields: string[] = res?.parsed_fields || [];
+        const filled = res?.auto_filled || {};
+        const hint = fields.length
+          ? `Auto-filled: ${fields.slice(0, 6).join(', ')}${fields.length > 6 ? ` +${fields.length - 6} more` : ''}`
+          : 'Resume saved. Could not auto-parse fields — edit your profile manually.';
+        toast({
+          title: fields.length ? 'Resume parsed — profile auto-filled' : 'Resume uploaded',
+          description: hint,
+        });
+        // Reload profile + momentum so the newly parsed fields appear immediately.
+        await loadData();
+        // If we're editing the profile, hydrate the form with the freshly parsed values.
+        setProfileForm(p => ({
+          ...p,
+          first_name: p.first_name || filled.first_name || p.first_name,
+          last_name: p.last_name || filled.last_name || p.last_name,
+          bio: p.bio || filled.bio || p.bio,
+          phone: p.phone || filled.phone || p.phone,
+          linkedin_url: p.linkedin_url || filled.linkedin_url || p.linkedin_url,
+          github_url: p.github_url || filled.github_url || p.github_url,
+          department: p.department || filled.department || p.department,
+          cgpa: p.cgpa || filled.cgpa || p.cgpa,
+          skills: (filled.skills && filled.skills.length) ? filled.skills.join(', ') : p.skills,
+          resume_text: p.resume_text || (res?.text_length ? p.resume_text : p.resume_text),
+        }));
+      } catch (err: any) {
+        toast({ title: 'Upload failed', description: err.message || 'Please try again.', variant: 'destructive' });
+      }
+      setUploading(false);
+    };
+    reader.readAsDataURL(file);
+  };
 
   const loadResume = async () => {
     if (resumeData) { setShowResume(true); return; }
