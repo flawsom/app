@@ -438,16 +438,23 @@ export default function LandingPage() {
 
       {/* ═══ FOOTER ═══ */}
       <footer className="border-t py-10" style={{ borderColor: 'var(--border-subtle)' }}>
-        <div className="max-w-7xl mx-auto px-6 md:px-10 flex items-center justify-between text-xs text-[var(--text-muted)]">
-          <div className="flex items-center gap-2.5">
-            <div className="w-6 h-6 rounded-sm flex items-center justify-center" style={{ background: 'var(--gradient-primary)' }}>
-              <span className="text-black font-bold text-[8px]">U</span>
-            </div>
-            <span className="font-bold text-[var(--text-secondary)]">UNIFY</span>
-          </div>
-          <p className="font-mono text-[10px]">STOP GUESSING. START WINNING.</p>
-        </div>
-      </footer>
+  <div className="max-w-7xl mx-auto px-6 md:px-10 flex items-center justify-between text-xs text-[var(--text-muted)]">
+    
+    <div className="flex items-center gap-2.5">
+      <div className="w-6 h-6 rounded-sm flex items-center justify-center overflow-hidden">
+        <img
+          src="/icon.svg"
+          alt="UNIFY logo"
+          className="w-4 h-4 object-contain"
+        />
+      </div>
+      <span className="font-bold text-[var(--text-secondary)]">UNIFY</span>
+    </div>
+
+    <p className="font-mono text-[10px]">STOP GUESSING. START WINNING.</p>
+
+  </div>
+</footer>
     </div>
   );
 }

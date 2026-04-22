@@ -139,9 +139,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <aside className={`fixed lg:sticky top-0 left-0 z-40 h-screen w-56 sidebar-glass flex flex-col transition-transform duration-500 lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`} data-testid="dashboard-sidebar">
         <div className="p-5 border-b flex items-center justify-between" style={{ borderColor: 'var(--border-subtle)' }}>
           <div className="flex items-center gap-2.5 cursor-pointer" onClick={() => router.push('/')}>
-            <div className="w-7 h-7 rounded-md flex items-center justify-center" style={{ background: 'var(--gradient-primary)' }}>
-              <span className="text-black font-bold text-[10px]">U</span>
-            </div>
+            <div className="w-7 h-7 rounded-md flex items-center justify-center overflow-hidden">
+  <img
+    src="/icon.svg"
+    alt="UNIFY logo"
+    className="w-5 h-5 object-contain"
+  />
+</div>
             <span className="font-bold text-sm tracking-tight">UNIFY</span>
           </div>
           <button className="lg:hidden text-[var(--text-muted)]" onClick={() => setSidebarOpen(false)}><X className="w-4 h-4" /></button>
