@@ -416,7 +416,7 @@ export default function StudentDashboard() {
                 <div className="flex items-center gap-2">
                   <Brain className="w-4 h-4 text-[#00E5FF]" />
                   <h2 className="text-sm font-semibold text-white">AI Match Engine</h2>
-                  <span className="text-[9px] font-mono px-1.5 py-0.5 bg-[#00E5FF]/10 text-[#00E5FF] border border-[#00E5FF]/20 rounded-sm">GPT-5.2</span>
+                  <span className="text-[9px] font-mono px-1.5 py-0.5 bg-[#00E5FF]/10 text-[#00E5FF] border border-[#00E5FF]/20 rounded-sm">CLAUDE-4.7-OPUS</span>
                 </div>
                 <button onClick={generateRecs} disabled={recsLoading} className="btn-primary text-[10px] px-3 py-1.5 flex items-center gap-1.5 disabled:opacity-50" data-testid="generate-recs-btn">
                   {recsLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}

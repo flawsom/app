@@ -48,7 +48,7 @@ export default function ChatBot() {
           <div className="px-4 py-3 flex items-center gap-2.5 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
             <Sparkles className="w-4 h-4 text-[var(--cyan)]" />
             <span className="text-xs font-bold">UNIFY AI</span>
-            <span className="text-[8px] font-mono text-[var(--text-muted)] ml-auto tracking-wider">GPT-5.2</span>
+            <span className="text-[8px] font-mono text-[var(--text-muted)] ml-auto tracking-wider">CLAUDE-4.7-OPUS</span>
           </div>
           <div className="flex-1 overflow-y-auto p-3 space-y-2.5">
             {messages.length === 0 && (
