@@ -46,9 +46,16 @@ export default function RegisterPage() {
           <ArrowLeft className="w-3.5 h-3.5" /> {step > 1 ? 'Back' : 'Home'}
         </button>
 
-        <div className="w-10 h-10 rounded-md flex items-center justify-center mb-6" style={{ background: 'var(--gradient-primary)' }}>
-          <span className="text-black font-bold text-sm">U</span>
-        </div>
+        <div
+  className="w-10 h-10 rounded-md flex items-center justify-center mb-6 overflow-hidden"
+  style={{ background: 'var(--gradient-primary)' }}
+>
+  <img
+    src="/icon.svg"
+    alt="UNIFY logo"
+    className="w-6 h-6 object-contain"
+  />
+</div>
 
         {step === 1 ? (
           <div className="animate-fade-in">
