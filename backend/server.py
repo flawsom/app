@@ -830,7 +830,7 @@ async def forgot_password(request: Request):
     await db.password_reset_tokens.insert_one({"user_id": str(user["_id"]), "token": token, "expires_at": datetime.now(timezone.utc) + timedelta(hours=1), "used": False, "created_at": datetime.now(timezone.utc).isoformat()})
     # Fire the reset email via the logged/retrying sender.
     try:
-        reset_url = f"{FRONTEND_URL.rstrip('/')}/reset-password?token={token}"
+        reset_url = f"{FRONTEND_URL.rstrip('/')}/forgot-password?token={token}"
         sub, html, text = password_reset_email(user.get("name", ""), reset_url)
         await email_send(email, sub, html, text, email_type="password_reset")
     except Exception as e:  # noqa: BLE001
