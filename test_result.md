@@ -104,7 +104,7 @@
 
 user_problem_statement: |
   UNIFY master rebrand + security hardening + multi-provider AI + live data.
-  Full-run: removed all Emergent user-visible branding (kept only dev-only @emergentbase/visual-edits),
+  Full-run: removed all Emergent user-visible branding (kept only dev-only  @/visual-edits),
   rotated JWT secret, built the UNIFY Intelligence Engine (multi-provider AI router with failover
   across Anthropic → OpenAI → Gemini → universal fallback), wired live job data via JSearch + Adzuna,
   replaced Emergent Auth with direct Google OAuth ID-token verification, added per-user rate limits on

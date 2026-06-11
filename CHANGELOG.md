@@ -25,7 +25,7 @@ All notable changes to UNIFY are documented here.
 - Rebranded `render.yaml` comments and env-var names.
 - Renamed "UNIFY Auth" from a proxy on `auth.emergentagent.com` to direct Google OAuth.
 - Updated README top-to-bottom; removed all references to Emergent branding.
-- Kept the dev-only `@emergentbase/visual-edits` npm package (per user decision Q1-a) — it is inert in production builds.
+- Kept the dev-only ` @/visual-edits` npm package (per user decision Q1-a) — it is inert in production builds.
 
 ### UNIFY Intelligence Engine (Multi-provider AI router)
 - New module `backend/unify_ai.py` with automatic failover across Anthropic Claude → OpenAI GPT-4o → Google Gemini → universal `UNIFY_AI_KEY`.
